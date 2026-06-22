@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AWS SAP 스터디 트래커</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="wrap">
+
+    <!-- ── 헤더 ───────────────────────────────── -->
+    <header class="topbar">
+      <div class="brand">
+        <span class="badge">SAP</span>
+        <div>
+          <h1>AWS Solutions Architect Pro</h1>
+          <p class="sub">스터디 트래커 · 로그로 관리</p>
+        </div>
+      </div>
+      <div class="streak" id="streak" title="연속 학습일">
+        <span class="streak-num" id="streakNum">–</span>
+        <span class="streak-label">일 연속 🔥</span>
+      </div>
+    </header>
+
+    <!-- ── 보기 토글 (가연 | 동료 | 합쳐서 보기) ── -->
+    <nav class="viewbar">
+      <div class="seg" id="viewToggle">
+        <span class="seg-ind" id="segInd"></span>
+      </div>
+    </nav>
+
+    <main id="viewRoot">
+
+    <!-- ── 오늘 핵심 지표 ───────────────────────── -->
+    <section class="hero" aria-label="오늘 요약">
+      <div class="hero-date" id="heroDate">오늘</div>
+      <div class="metrics">
+        <div class="metric">
+          <span class="m-label">공부 시간</span>
+          <span class="m-value" id="mTime">–</span>
+        </div>
+        <div class="metric">
+          <span class="m-label">덤프 푼 문제</span>
+          <span class="m-value" id="mDumps">–</span>
+        </div>
+        <div class="metric accent">
+          <span class="m-label">정답률</span>
+          <span class="m-value" id="mAcc">–</span>
+        </div>
+        <div class="metric">
+          <span class="m-label">오답</span>
+          <span class="m-value" id="mWrong">–</span>
+        </div>
+      </div>
+      <div class="lecture-row">
+        <span class="m-label">오늘 강의 진도</span>
+        <span class="lecture-val" id="mLecture">–</span>
+      </div>
+      <div class="confusing" id="confusingBox">
+        <span class="m-label">오늘 가장 헷갈린 개념</span>
+        <p class="confusing-val" id="mConfusing">–</p>
+      </div>
+    </section>
+
+    <div class="grid2">
+
+      <!-- ── 타이머 + 기록 입력 ────────────────── -->
+      <section class="card">
+        <h2 class="card-title">⏱ 타이머 &amp; 오늘 기록</h2>
+
+        <div class="timer">
+          <div class="timer-display" id="timerDisplay">00:00:00</div>
+          <div class="timer-btns">
+            <button id="tStart" class="btn primary">시작</button>
+            <button id="tPause" class="btn">일시정지</button>
+            <button id="tReset" class="btn ghost">리셋</button>
+          </div>
+        </div>
+
+        <form id="entryForm" class="entry">
+          <div class="row">
+            <label>이름
+              <input type="text" id="fUser" placeholder="가연" />
+            </label>
+            <label>공부 시간(분)
+              <input type="number" id="fStudyMin" min="0" placeholder="타이머값 자동" />
+            </label>
+          </div>
+          <div class="row">
+            <label>강의 진도
+              <input type="text" id="fLecture" placeholder="Sec5 / L23" />
+            </label>
+          </div>
+          <div class="row">
+            <label>덤프 푼 문제 수
+              <input type="number" id="fDumps" min="0" placeholder="30" />
+            </label>
+            <label>맞은 문제 수
+              <input type="number" id="fCorrect" min="0" placeholder="24" />
+            </label>
+          </div>
+          <label>문제별 기록 · 오답노트
+            <textarea id="fProblems" rows="4"
+              placeholder="한 줄에 하나씩:&#10;Q123 x DMS 는 스키마 변환 X&#10;Q124 o&#10;Q130 x Snowball vs DataSync 선택 기준"></textarea>
+            <span class="hint">형식: <code>문제번호 o/x 메모</code> · o=정답, x=오답</span>
+          </label>
+          <label>오늘 가장 헷갈린 개념 1개
+            <input type="text" id="fConfusing" placeholder="6R 마이그레이션 전략 구분" />
+          </label>
+
+          <button type="submit" class="btn primary wide">로그 1줄 생성 →</button>
+        </form>
+
+        <div class="output hidden" id="outBox">
+          <div class="out-head">
+            <span>study-log.jsonl 에 붙여넣을 줄</span>
+            <button id="copyBtn" class="btn small">📋 복사</button>
+          </div>
+          <pre id="outLine"></pre>
+          <p class="hint">이 줄을 <code>study-log.jsonl</code> 맨 아래에 추가하고 commit/push 하면 끝.</p>
+        </div>
+      </section>
+
+      <!-- ── 오답노트 ─────────────────────────── -->
+      <section class="card">
+        <h2 class="card-title">📕 오답노트 <span class="muted" id="wrongCount"></span></h2>
+        <div id="wrongList" class="wrong-list"></div>
+      </section>
+
+    </div>
+
+    <!-- ── 동료 비교 ────────────────────────── -->
+    <section class="card" id="compareCard">
+      <h2 class="card-title">👥 동료 비교 <span class="muted">최근 7일</span></h2>
+      <div id="compareTable" class="compare"></div>
+    </section>
+
+    <!-- ── 최근 추이 ────────────────────────── -->
+    <section class="card">
+      <h2 class="card-title">📈 최근 추이</h2>
+      <div id="trend" class="trend"></div>
+      <div id="loadFallback" class="fallback hidden">
+        <p>로컬 파일(<code>file://</code>)로 열면 보안 때문에 로그를 못 읽어요.
+           아래에서 <code>study-log.jsonl</code> 을 직접 선택하거나, GitHub Pages / 로컬 서버로 여세요.</p>
+        <input type="file" id="filePicker" accept=".jsonl,.json,.txt" />
+      </div>
+    </section>
+
+    </main>
+
+    <footer class="foot">
+      데이터는 <code>study-log.jsonl</code> 한 곳에서 관리됩니다 · 수정 후 새로고침하면 반영돼요
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
