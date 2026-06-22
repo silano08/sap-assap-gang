@@ -1,3 +1,4 @@
 // study-log.jsonl — 하루 = 한 줄(JSON). 아래에 기록을 추가하고 commit/push 하면 끝.
 // "//" 로 시작하는 줄은 무시됩니다. 입력폼의 "로그 1줄 생성 →" 결과를 그대로 붙여넣어도 돼요.
 // 예: {"user":"가연","date":"2026-06-22","studyMin":120,"lecture":"Sec5 / L23","dumps":30,"correct":24,"problems":[{"id":"Q123","ok":false,"note":"메모"}],"confusing":"헷갈린 개념"}
+{"user":"가연","date":"2026-06-22","studyMin":0,"lecture":"1챕터","dumps":0,"correct":0,"problems":[{"id":"테스트세트","ok":false,"note":""}],"confusing":"테스트"}
