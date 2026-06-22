@@ -76,6 +76,77 @@ function mergeLocal(logEntries) {
 
 function refreshData() { ALL = mergeLocal(LOG); }
 
+/* ── GitHub API 자동 커밋 ─────────────────────────────────
+   정적사이트지만 브라우저가 GitHub REST API 로 직접 커밋.
+   토큰은 이 브라우저(localStorage)에만 저장 — 코드/깃엔 절대 없음.
+   토큰은 fine-grained, 이 레포만 Contents:RW 권장. ============= */
+const GH = { owner: "silano08", repo: "sap-assap-gang", branch: "main", path: "study-log.jsonl" };
+const GH_TOKEN_KEY = "sap-gh-token";
+const ghToken = () => localStorage.getItem(GH_TOKEN_KEY) || "";
+const ghHeaders = () => ({
+  "Authorization": "Bearer " + ghToken(),
+  "Accept": "application/vnd.github+json",
+  "X-GitHub-Api-Version": "2022-11-28",
+});
+const b64encode = (s) => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
+const b64decode = (b) => new TextDecoder().decode(Uint8Array.from(atob(b.replace(/\n/g, "")), (c) => c.charCodeAt(0)));
+
+// 원문 텍스트에서 같은 (이름+날짜) 줄을 교체하고 새 줄 추가 (주석 보존)
+function upsertLineInText(raw, entry) {
+  const k = keyOf(entry);
+  const kept = (raw || "").split("\n").filter((l) => {
+    const t = l.trim();
+    if (!t || t.startsWith("//")) return true;
+    try { return keyOf(JSON.parse(t)) !== k; } catch { return true; }
+  });
+  while (kept.length && kept[kept.length - 1].trim() === "") kept.pop();
+  kept.push(JSON.stringify(entry));
+  return kept.join("\n") + "\n";
+}
+
+async function ghGetFile() {
+  const url = `https://api.github.com/repos/${GH.owner}/${GH.repo}/contents/${GH.path}?ref=${GH.branch}`;
+  const res = await fetch(url, { headers: ghHeaders(), cache: "no-store" });
+  if (res.status === 404) return { sha: null, text: "" };
+  if (!res.ok) throw new Error(res.status === 401 ? "토큰 권한/만료 확인" : "GET " + res.status);
+  const j = await res.json();
+  return { sha: j.sha, text: b64decode(j.content || "") };
+}
+
+async function ghPutFile(text, sha, message) {
+  const url = `https://api.github.com/repos/${GH.owner}/${GH.repo}/contents/${GH.path}`;
+  const body = { message, content: b64encode(text), branch: GH.branch };
+  if (sha) body.sha = sha;
+  return fetch(url, { method: "PUT", headers: ghHeaders(), body: JSON.stringify(body) });
+}
+
+// 최신본 받아 → 줄 교체 → 커밋. 충돌(409)나면 한 번 재시도.
+async function commitEntry(entry) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { sha, text } = await ghGetFile();
+    const newText = upsertLineInText(text, entry);
+    const res = await ghPutFile(newText, sha, `log: ${userOf(entry)} ${entry.date}`);
+    if (res.ok) { LOG = parseLog(newText); return true; }
+    if (res.status === 409) continue; // 다른 사람이 먼저 커밋 → 다시
+    throw new Error(res.status === 401 ? "토큰 권한/만료 확인" : "HTTP " + res.status);
+  }
+  throw new Error("커밋 충돌 — 다시 눌러줘");
+}
+
+function setCommitStatus(text, kind) {
+  const el = $("commitStatus");
+  if (!el) return;
+  el.textContent = text;
+  el.className = "hint commit-status" + (kind ? " " + kind : "");
+}
+function updateGhState() {
+  const el = $("ghState");
+  if (!el) return;
+  const on = !!ghToken();
+  el.textContent = on ? "연결됨 ✓" : "미연결";
+  el.classList.toggle("on", on);
+}
+
 /* ── 상단 토글 ────────────────────────────────────────── */
 function buildToggle() {
   segOrder = [...USERS, ALL_VIEW];
@@ -430,22 +501,51 @@ function init() {
   $("tReset").addEventListener("click", resetTimer);
   window.addEventListener("resize", moveIndicator);
 
-  $("entryForm").addEventListener("submit", (e) => {
+  $("entryForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     const entry = buildEntry();
-
-    // 1) 복사용 JSONL 한 줄
     $("outLine").textContent = JSON.stringify(entry);
-    $("outBox").classList.remove("hidden");
 
-    // 2) 이 브라우저에 저장 + 화면 즉시 반영 (해당 사람 뷰로 이동)
+    // 1) 화면 즉시 반영 (해당 사람 뷰로 이동) + 이 브라우저 저장
     upsertLocal(entry);
     refreshData();
     view = userOf(entry);
     renderAll();
     updateLocalBadge();
 
-    $("outBox").scrollIntoView({ behavior: "smooth", block: "nearest" });
+    // 2) 토큰 있으면 자동 커밋(동적처럼), 없으면 복붙용 줄 노출
+    if (ghToken()) {
+      $("outBox").classList.add("hidden");
+      setCommitStatus("⏳ 깃 커밋 중…", "pending");
+      try {
+        await commitEntry(entry);
+        refreshData();        // 커밋본이 LOG 로, 로컬 임시본 자동 정리
+        renderAll();
+        updateLocalBadge();
+        setCommitStatus("✓ 깃에 커밋됨 — 소울도 새로고침하면 보여요", "ok");
+      } catch (err) {
+        setCommitStatus("⚠ 자동 커밋 실패: " + err.message + " — 아래 줄을 수동 커밋하세요", "err");
+        $("outBox").classList.remove("hidden");
+      }
+    } else {
+      setCommitStatus("", "");
+      $("outBox").classList.remove("hidden");
+      $("outBox").scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  });
+
+  $("ghSaveBtn")?.addEventListener("click", () => {
+    const t = $("ghToken").value.trim();
+    if (!t) return;
+    localStorage.setItem(GH_TOKEN_KEY, t);
+    $("ghToken").value = "";
+    updateGhState();
+    setCommitStatus("✓ 토큰 저장됨 — 이제 '오늘 기록 추가'가 자동 커밋돼요", "ok");
+  });
+  $("ghClearBtn")?.addEventListener("click", () => {
+    localStorage.removeItem(GH_TOKEN_KEY);
+    updateGhState();
+    setCommitStatus("토큰 해제됨 — 자동 커밋 끔", "");
   });
 
   $("clearLocalBtn")?.addEventListener("click", () => {
@@ -470,5 +570,6 @@ function init() {
 
   load();
   updateLocalBadge();
+  updateGhState();
 }
 document.addEventListener("DOMContentLoaded", init);

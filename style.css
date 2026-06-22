@@ -217,6 +217,49 @@ body {
 }
 .local-badge b { color: var(--ink); }
 .local-badge .btn { margin-left: auto; }
+
+/* 깃 자동 커밋 설정 */
+.gh-setup {
+  margin-top: 14px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 13px;
+}
+.gh-setup summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: var(--ink);
+  list-style: none;
+}
+.gh-setup summary::-webkit-details-marker { display: none; }
+.gh-state {
+  margin-left: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.gh-state.on { color: #1a8754; }
+.gh-setup .hint a { color: var(--accent); font-weight: 600; }
+.gh-row {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0;
+}
+.gh-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+.commit-status { margin: 6px 0 0; font-weight: 600; }
+.commit-status.ok { color: #1a8754; }
+.commit-status.err { color: #c0392b; }
+.commit-status.pending { color: var(--accent); }
 .card {
   background: var(--card);
   border-radius: var(--radius);
