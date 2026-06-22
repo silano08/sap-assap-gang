@@ -190,8 +190,33 @@ body {
   grid-template-columns: 1fr 1fr;
   gap: 20px;
 }
-/* 합쳐서 보기: 입력 카드 숨김 → 오답노트 한 칸 전체 폭 */
+/* 합계 보기: 입력 카드 숨김 → 오답노트 한 칸 전체 폭 */
 .grid2.solo { grid-template-columns: 1fr; }
+
+/* 저장 안내 + 로컬 임시기록 뱃지 */
+.saved-note {
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  background: rgba(26, 135, 84, 0.1);
+  color: #1a8754;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.local-badge {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 8px 12px;
+  background: var(--bg);
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.local-badge b { color: var(--ink); }
+.local-badge .btn { margin-left: auto; }
 .card {
   background: var(--card);
   border-radius: var(--radius);

@@ -24,7 +24,7 @@
       </div>
     </header>
 
-    <!-- ── 보기 토글 (가연 | 소울 | 합쳐서 보기) ── -->
+    <!-- ── 보기 토글 (가연 | 소울 | 합계) ── -->
     <nav class="viewbar">
       <div class="seg" id="viewToggle">
         <span class="seg-ind" id="segInd"></span>
@@ -110,16 +110,23 @@
             <input type="text" id="fConfusing" placeholder="6R 마이그레이션 전략 구분" />
           </label>
 
-          <button type="submit" class="btn primary wide">로그 1줄 생성 →</button>
+          <button type="submit" class="btn primary wide">오늘 기록 추가 →</button>
         </form>
 
         <div class="output hidden" id="outBox">
+          <p class="saved-note">✅ 이 브라우저에 저장했어요 — 위 대시보드에 바로 반영됩니다.</p>
           <div class="out-head">
-            <span>study-log.jsonl 에 붙여넣을 줄</span>
+            <span>소울과 공유하려면 ↓ 이 줄을 커밋</span>
             <button id="copyBtn" class="btn small">📋 복사</button>
           </div>
           <pre id="outLine"></pre>
-          <p class="hint">이 줄을 <code>study-log.jsonl</code> 맨 아래에 추가하고 commit/push 하면 끝.</p>
+          <p class="hint">이 줄을 <code>study-log.jsonl</code> 맨 아래에 붙여넣고 commit/push 하면
+             소울·다른 기기에도 보여요. (커밋되면 로컬 임시본은 자동 정리됨)</p>
+        </div>
+
+        <div class="local-badge hidden" id="localBadge">
+          💾 이 브라우저 임시 기록 <b id="localCount">0</b>개
+          <button id="clearLocalBtn" class="btn small ghost">비우기</button>
         </div>
       </section>
 

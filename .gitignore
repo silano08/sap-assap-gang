@@ -1,0 +1,2 @@
+# Windows 예약 device명이 가끔 파일로 생성됨 → 커밋 방지
+nul

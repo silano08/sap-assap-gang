@@ -12,10 +12,13 @@ const ALL_VIEW = "__ALL__";
 const DEFAULT_USERS = ["가연", "소울"]; // 로그가 비어도 토글에 항상 표시
 const PALETTE = ["#ff9900", "#2f6fed", "#1a8754", "#c026d3"]; // 유저별 색
 
-let ALL = [];        // 전체 로그
+let ALL = [];        // 화면에 쓰는 전체 = 커밋로그 + 로컬임시
+let LOG = [];        // 커밋된 로그(study-log.jsonl)만
 let USERS = [];      // 정렬된 유저 목록
 let view = null;     // 현재 보기: 유저명 또는 ALL_VIEW
 let segOrder = [];   // 토글 버튼 순서(값) — 전환 방향 계산용
+
+const LS_KEY = "sap-local-entries-v1"; // 이 브라우저 임시 저장
 
 /* ── 유틸 ─────────────────────────────────────────────── */
 const $ = (id) => document.getElementById(id);
@@ -42,10 +45,41 @@ function parseLog(text) {
     .sort((a, b) => (a.date < b.date ? -1 : 1));
 }
 
+/* ── 로컬 임시저장(localStorage) ──────────────────────────
+   정적사이트라 파일에 직접 못 씀 → 이 브라우저에만 저장.
+   커밋된 study-log.jsonl 에 같은 (이름+날짜) 가 들어오면 그게 우선이고
+   로컬 임시본은 자동으로 정리됨(중복 방지). =================== */
+const keyOf = (e) => userOf(e) + "|" + e.date;
+
+function loadLocal() {
+  try { return JSON.parse(localStorage.getItem(LS_KEY) || "[]"); }
+  catch { return []; }
+}
+function saveLocal(arr) {
+  try { localStorage.setItem(LS_KEY, JSON.stringify(arr)); } catch (e) { console.warn("localStorage 저장 실패:", e); }
+}
+function upsertLocal(entry) { // 같은 (이름+날짜) 있으면 교체
+  const arr = loadLocal().filter((e) => keyOf(e) !== keyOf(entry));
+  arr.push(entry);
+  saveLocal(arr);
+}
+function clearLocal() { saveLocal([]); }
+
+// 커밋로그 + 로컬임시 합치기(커밋이 우선, 로컬 중복본은 정리)
+function mergeLocal(logEntries) {
+  const logKeys = new Set(logEntries.map(keyOf));
+  const local = loadLocal();
+  const kept = local.filter((e) => !logKeys.has(keyOf(e)));
+  if (kept.length !== local.length) saveLocal(kept); // 커밋된 건 로컬에서 제거
+  return [...logEntries, ...kept].sort((a, b) => (a.date < b.date ? -1 : 1));
+}
+
+function refreshData() { ALL = mergeLocal(LOG); }
+
 /* ── 상단 토글 ────────────────────────────────────────── */
 function buildToggle() {
   segOrder = [...USERS, ALL_VIEW];
-  const labels = { [ALL_VIEW]: "합쳐서 보기" };
+  const labels = { [ALL_VIEW]: "합계" };
 
   const box = $("viewToggle");
   box.innerHTML = '<span class="seg-ind" id="segInd"></span>';
@@ -322,16 +356,21 @@ async function load() {
   try {
     const res = await fetch(LOG_FILE + "?v=" + Date.now());
     if (!res.ok) throw new Error("HTTP " + res.status);
-    ALL = parseLog(await res.text());
+    LOG = parseLog(await res.text());
+    refreshData();
     renderAll();
   } catch (err) {
     console.warn("로그 fetch 실패 (file:// 환경일 수 있음):", err.message);
+    // 커밋로그를 못 읽어도 로컬 임시저장만으로 토글·대시보드는 보여줌
+    LOG = [];
+    refreshData();
+    renderAll();
     $("loadFallback").classList.remove("hidden");
     $("filePicker").addEventListener("change", (ev) => {
       const file = ev.target.files[0];
       if (!file) return;
       const reader = new FileReader();
-      reader.onload = () => { $("loadFallback").classList.add("hidden"); ALL = parseLog(reader.result); renderAll(); };
+      reader.onload = () => { $("loadFallback").classList.add("hidden"); LOG = parseLog(reader.result); refreshData(); renderAll(); };
       reader.readAsText(file);
     });
   }
@@ -371,7 +410,16 @@ function buildEntry() {
   if (!isNaN(correct)) entry.correct = correct;
   if (problems.length) entry.problems = problems;
   if ($("fConfusing").value.trim()) entry.confusing = $("fConfusing").value.trim();
-  return JSON.stringify(entry);
+  return entry;
+}
+
+function updateLocalBadge() {
+  const n = loadLocal().length;
+  const el = $("localBadge");
+  if (!el) return;
+  el.classList.toggle("hidden", n === 0);
+  const cnt = $("localCount");
+  if (cnt) cnt.textContent = n;
 }
 
 /* ── 초기화 ───────────────────────────────────────────── */
@@ -384,9 +432,28 @@ function init() {
 
   $("entryForm").addEventListener("submit", (e) => {
     e.preventDefault();
-    $("outLine").textContent = buildEntry();
+    const entry = buildEntry();
+
+    // 1) 복사용 JSONL 한 줄
+    $("outLine").textContent = JSON.stringify(entry);
     $("outBox").classList.remove("hidden");
+
+    // 2) 이 브라우저에 저장 + 화면 즉시 반영 (해당 사람 뷰로 이동)
+    upsertLocal(entry);
+    refreshData();
+    view = userOf(entry);
+    renderAll();
+    updateLocalBadge();
+
     $("outBox").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  });
+
+  $("clearLocalBtn")?.addEventListener("click", () => {
+    if (!confirm("이 브라우저에 임시 저장된 기록을 모두 지울까요?\n(커밋한 study-log.jsonl 데이터는 그대로예요)")) return;
+    clearLocal();
+    refreshData();
+    renderAll();
+    updateLocalBadge();
   });
 
   $("copyBtn").addEventListener("click", async () => {
@@ -402,5 +469,6 @@ function init() {
   });
 
   load();
+  updateLocalBadge();
 }
 document.addEventListener("DOMContentLoaded", init);
