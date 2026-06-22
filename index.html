@@ -24,7 +24,7 @@
       </div>
     </header>
 
-    <!-- ── 보기 토글 (가연 | 동료 | 합쳐서 보기) ── -->
+    <!-- ── 보기 토글 (가연 | 소울 | 합쳐서 보기) ── -->
     <nav class="viewbar">
       <div class="seg" id="viewToggle">
         <span class="seg-ind" id="segInd"></span>
@@ -64,10 +64,10 @@
       </div>
     </section>
 
-    <div class="grid2">
+    <div class="grid2" id="mainGrid">
 
-      <!-- ── 타이머 + 기록 입력 ────────────────── -->
-      <section class="card">
+      <!-- ── 타이머 + 기록 입력 (개인 뷰 전용) ──── -->
+      <section class="card" id="entryCard">
         <h2 class="card-title">⏱ 타이머 &amp; 오늘 기록</h2>
 
         <div class="timer">
@@ -131,9 +131,9 @@
 
     </div>
 
-    <!-- ── 동료 비교 ────────────────────────── -->
+    <!-- ── 둘이 비교 ────────────────────────── -->
     <section class="card" id="compareCard">
-      <h2 class="card-title">👥 동료 비교 <span class="muted">최근 7일</span></h2>
+      <h2 class="card-title">👥 둘이 비교 <span class="muted">최근 7일</span></h2>
       <div id="compareTable" class="compare"></div>
     </section>
 

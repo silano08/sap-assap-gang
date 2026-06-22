@@ -1,13 +1,15 @@
 /* ===================================================================
    AWS SAP 스터디 트래커 — app.js
    - study-log.jsonl 을 읽어 대시보드 렌더 (읽기 전용)
-   - 상단 토글: [가연] [동료] [합쳐서 보기] — 슬라이딩 + 페이지 전환 효과
-   - 타이머 + 오늘 기록 입력폼 → 붙여넣을 JSONL 한 줄 생성
+   - 상단 토글: [가연] [소울] [합쳐서 보기] — 슬라이딩 + 페이지 전환 효과
+   - 개인 뷰에서만 타이머 + 오늘 기록 입력폼 → 붙여넣을 JSONL 한 줄 생성
+   - 합쳐서 보기는 비교 전용(입력 카드 숨김)
    백엔드 없음. 데이터는 오직 study-log.jsonl 한 곳에서 관리.
 =================================================================== */
 
 const LOG_FILE = "study-log.jsonl";
 const ALL_VIEW = "__ALL__";
+const DEFAULT_USERS = ["가연", "소울"]; // 로그가 비어도 토글에 항상 표시
 const PALETTE = ["#ff9900", "#2f6fed", "#1a8754", "#c026d3"]; // 유저별 색
 
 let ALL = [];        // 전체 로그
@@ -91,14 +93,20 @@ function renderView(dir = 1) {
   void root.offsetWidth; // 리플로우 → 애니메이션 재생
   root.classList.add(dir > 0 ? "view-right" : "view-left");
 
-  if (view === ALL_VIEW) renderCombined();
+  // 합쳐서 보기 = 비교 전용 → 타이머·입력 카드 숨김, 오답노트만 한 줄로
+  const combined = view === ALL_VIEW;
+  $("entryCard").style.display = combined ? "none" : "";
+  $("mainGrid").classList.toggle("solo", combined);
+
+  if (combined) renderCombined();
   else renderUser(view);
   renderCompare();
 }
 
 function renderAll() {
-  if (!ALL.length) { $("heroDate").textContent = "아직 기록 없음 — 오른쪽에서 첫 기록을 만들어보세요"; return; }
-  USERS = [...new Set(ALL.map(userOf))].sort();
+  // 데이터에 없는 사람이라도 기본 유저(가연·소울)는 항상 토글에 노출
+  const inData = [...new Set(ALL.map(userOf))];
+  USERS = [...DEFAULT_USERS, ...inData.filter((u) => !DEFAULT_USERS.includes(u))];
   buildToggle();
   renderView(1);
 }
@@ -108,6 +116,17 @@ function renderUser(user) {
   const mine = ALL.filter((e) => userOf(e) === user);
   const today = todayStr();
   const e = mine.find((x) => x.date === today) || mine[mine.length - 1];
+
+  if (!e) { // 아직 이 사람 기록이 없음
+    $("heroDate").innerHTML = `${dot(user)}${escapeHtml(user)} · 아직 기록 없음`;
+    ["mTime", "mDumps", "mAcc", "mWrong"].forEach((id) => ($(id).textContent = "–"));
+    $("mLecture").textContent = "–";
+    $("mConfusing").textContent = "오른쪽에서 첫 기록을 만들어보세요";
+    $("streakNum").textContent = "0";
+    renderWrongNotes(mine, false);
+    renderTrend(mine);
+    return;
+  }
 
   $("heroDate").innerHTML = `${e.date === today ? "오늘" : "최근 기록"} · ${e.date} · ${dot(user)}${escapeHtml(user)}`;
   $("mTime").textContent = fmtMinutes(e.studyMin);
@@ -126,6 +145,18 @@ function renderUser(user) {
 /* ── 합쳐서 보기 ──────────────────────────────────────── */
 function renderCombined() {
   const day = [...new Set(ALL.map((e) => e.date))].sort().pop(); // 가장 최근 날짜
+
+  if (!day) { // 아직 아무 기록도 없음
+    $("heroDate").innerHTML = `오늘 합쳐서 · ` + USERS.map((u) => dot(u) + escapeHtml(u)).join(" + ");
+    ["mTime", "mDumps", "mAcc", "mWrong"].forEach((id) => ($(id).textContent = "–"));
+    $("mLecture").textContent = "–";
+    $("mConfusing").textContent = "아직 기록 없음";
+    $("streakNum").textContent = "0";
+    renderWrongNotes([], true);
+    renderTrendCombined();
+    return;
+  }
+
   const dayRows = USERS.map((u) => ALL.find((e) => userOf(e) === u && e.date === day)).filter(Boolean);
 
   const sum = (f) => dayRows.reduce((s, e) => s + (f(e) || 0), 0);
@@ -226,6 +257,8 @@ function renderTrendCombined() {
   legend.innerHTML = USERS.map((u) => `${dot(u)}${escapeHtml(u)}`).join("");
   box.appendChild(legend);
 
+  if (!dates.length) { box.insertAdjacentHTML("beforeend", '<p class="empty">기록 없음</p>'); return; }
+
   dates.forEach((date) => {
     const row = document.createElement("div");
     row.className = "trend-c-row";
@@ -242,7 +275,7 @@ function renderTrendCombined() {
   });
 }
 
-/* ── 동료 비교 카드 (항상 전체) ───────────────────────── */
+/* ── 둘이 비교 카드 (항상 전체) ───────────────────────── */
 function renderCompare() {
   const box = $("compareTable");
   box.innerHTML = "";

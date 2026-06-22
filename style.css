@@ -190,6 +190,8 @@ body {
   grid-template-columns: 1fr 1fr;
   gap: 20px;
 }
+/* 합쳐서 보기: 입력 카드 숨김 → 오답노트 한 칸 전체 폭 */
+.grid2.solo { grid-template-columns: 1fr; }
 .card {
   background: var(--card);
   border-radius: var(--radius);
@@ -362,7 +364,7 @@ body {
 .bar-fill.u1 { background: linear-gradient(90deg, #5b8def, var(--accent2)); }
 .trend-legend { display: flex; gap: 16px; margin-bottom: 14px; font-size: 12px; color: var(--ink-2); font-weight: 600; }
 
-/* ── 동료 비교 ────────────────────────────── */
+/* ── 둘이 비교 ────────────────────────────── */
 .compare { display: flex; flex-direction: column; gap: 4px; }
 .cmp-row {
   display: grid;
