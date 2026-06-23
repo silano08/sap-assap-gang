@@ -3,3 +3,4 @@
 // 예: {"user":"가연","date":"2026-06-22","studyMin":120,"lecture":"Sec5 / L23","dumps":30,"correct":24,"problems":[{"id":"Q123","ok":false,"note":"메모"}],"confusing":"헷갈린 개념"}
 {"user":"가연","date":"2026-06-22","studyMin":0,"lecture":"1챕터","dumps":0,"correct":0,"problems":[{"id":"테스트세트","ok":false,"note":""}],"confusing":"테스트"}
 {"user":"소울","date":"2026-06-22","studyMin":0,"lecture":"AA","dumps":0,"correct":0,"problems":[{"id":"안녕하세요","ok":false,"note":""}],"confusing":"안녕하세요"}
+{"user":"가연","date":"2026-06-23","studyMin":3,"lecture":"IAM 보는중","dumps":0,"correct":0,"problems":[{"id":"https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_examples.html","ok":false,"note":""},{"id":"아니 브라우저에서 시작버튼을 안누름","ok":false,"note":""}]}
