@@ -218,6 +218,7 @@ function renderView(dir = 1) {
   // 합쳐서 보기 = 비교 전용
   const combined = view === ALL_VIEW;
   $("mainGrid").classList.add("solo");
+  $("mainGrid").classList.toggle("hidden", combined);
 
   if (combined) renderCombined();
   else renderUser(view);
@@ -274,7 +275,6 @@ function renderCombined() {
     $("mLecture").textContent = "–";
     $("mConfusing").textContent = "아직 기록 없음";
     $("streakNum").textContent = "0";
-    renderSummaryNotes(null);
     renderTrendCombined();
     return;
   }
@@ -305,7 +305,6 @@ function renderCombined() {
   }).join("<br>");
 
   $("streakNum").textContent = streakOf(ALL); // 둘 중 누구든 공부한 연속일
-  renderSummaryNotes(null);
   renderTrendCombined();                      // 날짜별 두 사람 막대
 }
 
