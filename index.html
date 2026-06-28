@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AWS SAP 스터디 트래커</title>
-  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="style.css?v=20260628-notes-cache" />
 </head>
 <body>
   <div class="wrap">
@@ -15,7 +15,7 @@
         <span class="badge">SAP</span>
         <div>
           <h1>AWS Solutions Architect Pro</h1>
-          <p class="sub">스터디 트래커 · 로그로 관리</p>
+          <p class="sub">문제풀이 기록 · 요약정리</p>
         </div>
       </div>
       <div class="streak" id="streak" title="연속 학습일">
@@ -29,6 +29,7 @@
       <div class="seg" id="viewToggle">
         <span class="seg-ind" id="segInd"></span>
       </div>
+      <button class="btn primary quiz-open-btn" id="quizOpenBtn" type="button">문제풀기</button>
     </nav>
 
     <main id="viewRoot">
@@ -64,95 +65,26 @@
       </div>
     </section>
 
-    <div class="grid2" id="mainGrid">
+    <div class="grid2 solo" id="mainGrid">
 
-      <!-- ── 타이머 + 기록 입력 (개인 뷰 전용) ──── -->
-      <section class="card" id="entryCard">
-        <h2 class="card-title">⏱ 타이머 &amp; 오늘 기록</h2>
-
-        <div class="timer">
-          <div class="timer-display" id="timerDisplay">00:00:00</div>
-          <div class="timer-btns">
-            <button id="tStart" class="btn primary">시작</button>
-            <button id="tPause" class="btn">일시정지</button>
-            <button id="tReset" class="btn ghost">리셋</button>
+      <!-- ── 요약정리 ─────────────────────────── -->
+      <section class="card summary-card">
+        <h2 class="card-title">📒 요약정리 <span class="muted" id="summaryCount"></span></h2>
+        <div class="summary-form" id="summaryForm">
+          <div class="summary-row">
+            <input type="text" id="summaryTitle" placeholder="제목" autocomplete="off" />
+            <label class="file-btn summary-upload">
+              MD 업로드
+              <input type="file" id="summaryFile" accept=".md,.txt,text/markdown,text/plain" />
+            </label>
+          </div>
+          <textarea id="summaryContent" rows="5" placeholder="요약 정리 붙여넣기"></textarea>
+          <div class="summary-actions">
+            <span class="hint" id="summaryStatus"></span>
+            <button class="btn small primary" id="summarySaveBtn" type="button">요약 저장</button>
           </div>
         </div>
-
-        <form id="entryForm" class="entry">
-          <div class="row">
-            <label>이름
-              <input type="text" id="fUser" placeholder="가연" />
-            </label>
-            <label>공부 시간(분)
-              <input type="number" id="fStudyMin" min="0" placeholder="타이머값 자동" />
-            </label>
-          </div>
-          <div class="row">
-            <label>강의 진도
-              <input type="text" id="fLecture" placeholder="Sec5 / L23" />
-            </label>
-          </div>
-          <div class="row">
-            <label>덤프 푼 문제 수
-              <input type="number" id="fDumps" min="0" placeholder="30" />
-            </label>
-            <label>맞은 문제 수
-              <input type="number" id="fCorrect" min="0" placeholder="24" />
-            </label>
-          </div>
-          <label>문제별 기록 · 오답노트
-            <textarea id="fProblems" rows="4"
-              placeholder="한 줄에 하나씩:&#10;Q123 x DMS 는 스키마 변환 X&#10;Q124 o&#10;Q130 x Snowball vs DataSync 선택 기준"></textarea>
-            <span class="hint">형식: <code>문제번호 o/x 메모</code> · o=정답, x=오답</span>
-          </label>
-          <label>오늘 가장 헷갈린 개념 1개
-            <input type="text" id="fConfusing" placeholder="6R 마이그레이션 전략 구분" />
-          </label>
-
-          <button type="submit" class="btn primary wide">오늘 기록 추가 →</button>
-        </form>
-
-        <div class="output hidden" id="outBox">
-          <p class="saved-note">✅ 이 브라우저에 저장했어요 — 위 대시보드에 바로 반영됩니다.</p>
-          <div class="out-head">
-            <span>소울과 공유하려면 ↓ 이 줄을 커밋</span>
-            <button id="copyBtn" class="btn small">📋 복사</button>
-          </div>
-          <pre id="outLine"></pre>
-          <p class="hint">이 줄을 <code>study-log.jsonl</code> 맨 아래에 붙여넣고 commit/push 하면
-             소울·다른 기기에도 보여요. (커밋되면 로컬 임시본은 자동 정리됨)</p>
-        </div>
-
-        <div class="local-badge hidden" id="localBadge">
-          💾 이 브라우저 임시 기록 <b id="localCount">0</b>개
-          <button id="clearLocalBtn" class="btn small ghost">비우기</button>
-        </div>
-
-        <!-- ── 깃 자동 커밋(선택) ── -->
-        <details class="gh-setup" id="ghSetup">
-          <summary>⚙ 깃 자동 커밋 <span class="gh-state" id="ghState">미연결</span></summary>
-          <p class="hint">토큰을 넣으면 <b>“오늘 기록 추가”가 자동으로 깃에 커밋</b>돼요(복붙 불필요, 동적 앱처럼).
-             토큰은 <b>이 브라우저에만</b> 저장되고 코드·깃엔 안 들어갑니다.</p>
-          <p class="hint">
-            👉 <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">fine-grained 토큰 만들기</a> ·
-            <b>Repository access</b> → Only select repositories → <code>sap-assap-gang</code> ·
-            <b>Permissions</b> → Contents: <b>Read and write</b>
-          </p>
-          <div class="gh-row">
-            <input type="password" id="ghToken" placeholder="github_pat_..." autocomplete="off" spellcheck="false" />
-            <button id="ghSaveBtn" class="btn small primary" type="button">저장</button>
-            <button id="ghClearBtn" class="btn small ghost" type="button">해제</button>
-          </div>
-          <p class="hint commit-status" id="commitStatus"></p>
-          <p class="hint">⚠ 공용 PC에선 쓰지 마세요. 토큰은 GitHub 설정에서 언제든 폐기(revoke) 가능.</p>
-        </details>
-      </section>
-
-      <!-- ── 오답노트 ─────────────────────────── -->
-      <section class="card">
-        <h2 class="card-title">📕 오답노트 <span class="muted" id="wrongCount"></span></h2>
-        <div id="wrongList" class="wrong-list"></div>
+        <div id="summaryList" class="summary-list"></div>
       </section>
 
     </div>
@@ -168,19 +100,105 @@
       <h2 class="card-title">📈 최근 추이</h2>
       <div id="trend" class="trend"></div>
       <div id="loadFallback" class="fallback hidden">
-        <p>로컬 파일(<code>file://</code>)로 열면 보안 때문에 로그를 못 읽어요.
-           아래에서 <code>study-log.jsonl</code> 을 직접 선택하거나, GitHub Pages / 로컬 서버로 여세요.</p>
-        <input type="file" id="filePicker" accept=".jsonl,.json,.txt" />
+        <p>브라우저 보안 때문에 기존 기록을 불러오지 못했어요. GitHub Pages나 로컬 서버 주소로 열어주세요.</p>
       </div>
+    </section>
+
+    <section class="card sync-card">
+      <h2 class="card-title">⚙ 동기화</h2>
+      <div class="local-badge hidden" id="localBadge">
+        💾 이 브라우저 임시 기록 <b id="localCount">0</b>개
+        <button id="clearLocalBtn" class="btn small ghost">비우기</button>
+      </div>
+      <details class="gh-setup" id="ghSetup">
+        <summary>깃 자동 커밋 <span class="gh-state" id="ghState">미연결</span></summary>
+        <p class="hint">토큰을 넣으면 문제풀이 세션 저장이 자동으로 깃에 커밋돼요. 토큰은 이 브라우저에만 저장됩니다.</p>
+        <p class="hint">
+          👉 <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">fine-grained 토큰 만들기</a> ·
+          Repository access → <code>sap-assap-gang</code> · Contents: <b>Read and write</b>
+        </p>
+        <div class="gh-row">
+          <input type="password" id="ghToken" placeholder="github_pat_..." autocomplete="off" spellcheck="false" />
+          <button id="ghSaveBtn" class="btn small primary" type="button">저장</button>
+          <button id="ghClearBtn" class="btn small ghost" type="button">해제</button>
+        </div>
+        <p class="hint commit-status" id="commitStatus"></p>
+      </details>
     </section>
 
     </main>
 
     <footer class="foot">
-      데이터는 <code>study-log.jsonl</code> 한 곳에서 관리됩니다 · 수정 후 새로고침하면 반영돼요
+      문제풀이 세션과 요약정리는 이 브라우저에 먼저 저장돼요
     </footer>
   </div>
 
-  <script src="app.js"></script>
+  <div class="modal hidden" id="quizModal" role="dialog" aria-modal="true" aria-labelledby="quizModalTitle">
+    <div class="modal-backdrop" id="quizModalBackdrop"></div>
+    <section class="modal-panel quiz-modal-panel">
+      <header class="modal-head">
+        <div>
+          <h2 id="quizModalTitle">문제풀이</h2>
+          <p class="muted" id="quizModalMeta">현재 탭의 사용자 기록으로 자동 반영됩니다.</p>
+        </div>
+        <button class="modal-close" id="quizCloseBtn" type="button" aria-label="문제풀이 닫기">×</button>
+      </header>
+
+      <div class="quiz-loader">
+        <label class="file-btn">
+          DOCX 선택/교체
+          <input type="file" id="quizFile" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+        </label>
+        <button class="btn small ghost hidden" id="quizClearCacheBtn" type="button">문제은행 삭제</button>
+        <div class="quiz-status" id="quizStatus">DOCX를 선택하면 바로 문제풀이가 시작됩니다.</div>
+      </div>
+
+      <div class="quiz-ready hidden" id="quizReady">
+        <strong id="quizCount">0문제</strong>
+        <span class="muted" id="quizSource"></span>
+        <span class="muted" id="quizCacheMeta"></span>
+      </div>
+
+      <div class="quiz-play-area hidden" id="quizPlayArea">
+        <div class="quiz-session-bar">
+          <span id="quizSessionSolved">푼 문제 0</span>
+          <span id="quizSessionCorrect">정답 0</span>
+          <span id="quizSessionAccuracy">정답률 –</span>
+        </div>
+
+        <div class="quiz-modal-tools">
+          <input type="number" id="quizJump" min="1" placeholder="Q번호" />
+          <button class="btn small" id="quizJumpBtn" type="button">이동</button>
+          <button class="btn small" id="quizRandomBtn" type="button">랜덤</button>
+        </div>
+
+        <article class="quiz-question">
+          <div class="quiz-qtop">
+            <span class="quiz-number" id="quizNumber">Q–</span>
+            <span class="muted" id="quizProgress">–</span>
+          </div>
+          <p class="quiz-prompt" id="quizPrompt"></p>
+          <div class="quiz-options" id="quizOptions"></div>
+          <div class="quiz-answer hidden" id="quizAnswer"></div>
+        </article>
+
+        <footer class="modal-actions">
+          <button class="btn" id="quizRevealBtn" type="button">정답 보기</button>
+          <button class="btn primary" id="quizNextBtn" type="button">다음 랜덤</button>
+          <span class="save-preview-wrap" id="quizApplyWrap">
+            <button class="btn ghost" id="quizApplyBtn" type="button" disabled>세션 저장</button>
+            <div class="save-preview" id="quizSavePreview" role="status"></div>
+          </span>
+        </footer>
+      </div>
+    </section>
+  </div>
+
+  <script src="vendor/jszip.min.js?v=20260628"></script>
+  <script src="quiz-parser.js?v=20260628"></script>
+  <script src="quiz-cache.js?v=20260628-notes-cache"></script>
+  <script src="quiz-session.js?v=20260628-save-preview"></script>
+  <script src="summary-notes.js?v=20260628-notes-cache"></script>
+  <script src="app.js?v=20260628-notes-cache"></script>
 </body>
 </html>

@@ -1,96 +1,62 @@
-# AWS SAP 스터디 트래커 📚
+# AWS SAP 스터디 트래커
 
-### 🔗 https://silano08.github.io/sap-assap-gang/
+### https://silano08.github.io/sap-assap-gang/
 
-AWS Solutions Architect Professional 공부 진척을 **로그 파일 하나로** 관리하는 가벼운 대시보드.
-DB·백엔드 없음. `study-log.jsonl` 만 수정/커밋하면 어디서든 진도가 보입니다.
+AWS Solutions Architect Professional 덤프 풀이와 요약정리를 관리하는 정적 웹앱입니다.
 
-> 둘이 같이 쓰기 좋아요(가연·소울) — 각자 자기 줄을 추가하고 push 하면 됨.
+## 쓰는 법
 
-## 기능
+1. `가연` 또는 `소울` 탭을 고릅니다.
+2. **문제풀기** 버튼을 누릅니다.
+3. 모달에서 각자 가지고 있는 DOCX 파일을 선택합니다.
+4. 문제를 풀고 **정답 보기**를 누르면 세션 통계가 쌓입니다.
+5. **세션 저장**을 누르면 현재 탭 사용자 기록에 자동 반영됩니다.
+6. 요약정리는 MD/TXT 파일을 올리거나 직접 붙여넣어 저장합니다.
 
-- ⏱ **타이머** — 공부 시간 측정, 멈추면 입력칸에 분 단위 자동 기입
-- 📕 **오답노트** — 문제번호 + 메모, 최신순 모아보기
-- ✅ **오늘 강의 진도** / **덤프 푼 문제 수** / **정답률(%)**
-- 💡 **오늘 가장 헷갈린 개념 1개**
-- 📈 **최근 7일 추이** — 공부시간 막대 + 덤프/정답률
-- 🔥 **연속 학습일(streak)**
-- 👥 **상단 토글 `가연 | 소울 | 합계`** — 슬라이딩 인디케이터 + 페이지 전환 애니메이션
-  - 사람 탭: 그 사람 대시보드 + **타이머·기록 입력**(개인 뷰에서만)
-  - **합계**: 입력 카드 없이 **비교 전용** — 오늘 둘 합산(공부시간·덤프·정답률·오답) + 두 사람 오답노트(이름표) + 날짜별 **두 사람 막대 나란히**(가연=주황, 소울=파랑)
-  - **둘이 비교 카드**(항상 표시): 최근 7일 공부시간·덤프·정답률·연속, 1등 값은 강조
-  - 로그가 비어 있어도 토글에는 `가연 · 소울`이 항상 떠요(첫 기록 추가용)
-- ⚡ **깃 자동 커밋(선택)** — 토큰 한 번 넣으면 "오늘 기록 추가"가 **브라우저에서 바로 깃 커밋**(복붙·터미널 불필요, 동적 앱처럼)
+`합계` 탭은 비교 화면이라 문제풀이 버튼이 비활성화됩니다.
 
-## 데이터 구조 — `study-log.jsonl`
+## 주요 기능
 
-**하루 = 한 줄(JSON)**. git diff 가 깔끔하고 충돌이 거의 없습니다.
+- DOCX 문제 파싱
+- 랜덤 문제풀이
+- 정답률 자동 계산
+- 오늘 푼 덤프 문제 수 자동 반영
+- 파싱된 문제은행 브라우저 저장
+- 저장된 문제은행 삭제 및 DOCX 교체
+- 요약정리 MD/TXT 업로드
+- 가연/소울/합계 탭 전환
+- 최근 7일 비교
+- 선택적 GitHub 자동 커밋
 
-```json
-{"user":"가연","date":"2026-06-19","studyMin":120,"lecture":"Sec5 / L23","dumps":30,"correct":24,"problems":[{"id":"Q123","ok":false,"note":"DMS는 스키마 변환 X"},{"id":"Q124","ok":true,"note":""}],"confusing":"6R 마이그레이션 전략 구분"}
-```
+## DOCX 파일
 
-| 필드 | 의미 | 비고 |
-|------|------|------|
-| `user` | 작성자 이름 | 유저 선택/비교 기준 (없으면 "나") |
-| `date` | 날짜 `YYYY-MM-DD` | 필수 (정렬 기준) |
-| `studyMin` | 공부 시간(분) | 타이머값 |
-| `lecture` | 오늘 강의 진도 | 자유 텍스트 |
-| `dumps` | 덤프 푼 문제 수 | 정답률 분모 |
-| `correct` | 맞은 문제 수 | 정답률 = correct/dumps |
-| `problems[]` | 문제별 기록 | `ok:false` 만 오답노트에 표시 |
-| `confusing` | 가장 헷갈린 개념 1개 | |
+문제 원문 DOCX는 repo에 넣지 않습니다. 각자 받은 DOCX를 자기 브라우저에서 선택해서 풉니다.
 
-모든 필드는 `date` 빼고 선택. 없으면 그냥 `–` 로 표시됩니다.
+브라우저에서만 읽고 서버나 GitHub로 업로드하지 않습니다. 한 번 파싱한 뒤에는 DOCX 원본이 아니라 문제 JSON만 이 브라우저에 저장됩니다.
 
-## 기록하는 법 (3가지)
+## 동기화
 
-**A. 깃 자동 커밋 (제일 편함, 동적처럼)**
-1. 개인 탭(가연/소울) → 입력 카드 하단 **`⚙ 깃 자동 커밋`** 펼치기
-2. [fine-grained 토큰](https://github.com/settings/personal-access-tokens/new) 발급 — Repository access: *Only select repositories → `sap-assap-gang`*, Permissions: **Contents: Read and write** → 토큰 칸에 붙여넣고 **저장**(`연결됨 ✓`)
-3. 이제 타이머 돌리고 값 입력 → **"오늘 기록 추가"** → `✓ 깃에 커밋됨`. 끝.
-   - 토큰은 **이 브라우저에만** 저장(코드·깃엔 없음). 소울도 자기 브라우저에 자기 토큰. 공용 PC 금지, 언제든 revoke 가능.
+기본 저장은 이 브라우저에 먼저 됩니다.
 
-**B. 입력폼 + 수동 커밋 (토큰 없이)**
-1. **"오늘 기록 추가"** → 화면 즉시 반영(이 브라우저에 저장) + 복붙용 JSONL 한 줄 표시 → **📋 복사**
-2. `study-log.jsonl` 맨 아래에 붙여넣기 → commit & push
-   (제일 쉬운 커밋: GitHub 웹에서 [`study-log.jsonl` 편집](https://github.com/silano08/sap-assap-gang/edit/main/study-log.jsonl) → 붙여넣기 → Commit changes)
+동기화 카드에서 GitHub 토큰을 연결하면 **세션 저장** 시 자동으로 커밋됩니다. 토큰은 이 브라우저에만 저장됩니다.
 
-**C. 직접 손편집**
-- `study-log.jsonl` 에 한 줄 추가. 새로고침하면 반영.
-
-> 데이터 모델은 **(이름+날짜) 하루 한 줄** — 같은 날 다시 추가하면 그 줄이 교체돼요(중복 X).
-
-## 어디서든 보기 — GitHub Pages
-
-이미 배포돼 있어요 → **https://silano08.github.io/sap-assap-gang/**
-(레포 `silano08/sap-assap-gang`, Pages: `main` / `/ (root)`)
-
-이후엔 **로그만 커밋**하면 어디서든 최신 진도 확인 끝. 로컬에서 재배포할 때:
+## 로컬 실행
 
 ```bash
-cd aws-sap-tracker
-git add . && git commit -m "log: 오늘 공부" && git push
-# → Pages가 ~25초 뒤 자동 재빌드
+python -m http.server 8000
 ```
 
-## 로컬에서 보기
-
-`index.html` 더블클릭(`file://`)은 브라우저 보안 때문에 로그 자동읽기가 막힐 수 있어요.
-그땐 화면의 **파일 선택** 폴백을 쓰거나, 가벼운 로컬 서버로 여세요:
-
-```bash
-python -m http.server 8000   # → http://localhost:8000
-```
+브라우저에서 `http://localhost:8000` 또는 `http://127.0.0.1:8000`으로 열면 됩니다.
 
 ## 파일 구성
 
-```
-aws-sap-tracker/
-├── index.html       대시보드 마크업
-├── style.css        스타일 (시각적 위계 중심)
-├── app.js           로그 읽기 + 타이머 + localStorage + 깃 자동커밋
-├── study-log.jsonl  ★ 데이터 (이것만 관리)
-├── .gitignore       windows nul 등 제외
-└── README.md
+```text
+index.html
+style.css
+app.js
+quiz-parser.js
+quiz-cache.js
+quiz-session.js
+summary-notes.js
+vendor/jszip.min.js
 ```

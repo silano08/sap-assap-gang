@@ -1,10 +1,10 @@
 /* ===================================================================
    AWS SAP 스터디 트래커 — app.js
-   - study-log.jsonl 을 읽어 대시보드 렌더 (읽기 전용)
+   - 저장된 학습 기록을 읽어 대시보드 렌더
    - 상단 토글: [가연] [소울] [합쳐서 보기] — 슬라이딩 + 페이지 전환 효과
-   - 개인 뷰에서만 타이머 + 오늘 기록 입력폼 → 붙여넣을 JSONL 한 줄 생성
-   - 합쳐서 보기는 비교 전용(입력 카드 숨김)
-   백엔드 없음. 데이터는 오직 study-log.jsonl 한 곳에서 관리.
+   - 개인 뷰에서 문제풀이 세션을 저장하면 오늘 기록에 자동 반영
+   - 합쳐서 보기는 비교 전용
+   백엔드 없음. 정적 페이지에서 브라우저 저장과 선택적 GitHub 커밋을 사용.
 =================================================================== */
 
 const LOG_FILE = "study-log.jsonl";
@@ -47,7 +47,7 @@ function parseLog(text) {
 
 /* ── 로컬 임시저장(localStorage) ──────────────────────────
    정적사이트라 파일에 직접 못 씀 → 이 브라우저에만 저장.
-   커밋된 study-log.jsonl 에 같은 (이름+날짜) 가 들어오면 그게 우선이고
+   커밋된 기록에 같은 (이름+날짜) 가 들어오면 그게 우선이고
    로컬 임시본은 자동으로 정리됨(중복 방지). =================== */
 const keyOf = (e) => userOf(e) + "|" + e.date;
 
@@ -63,15 +63,16 @@ function upsertLocal(entry) { // 같은 (이름+날짜) 있으면 교체
   arr.push(entry);
   saveLocal(arr);
 }
+function removeLocal(entry) {
+  saveLocal(loadLocal().filter((e) => keyOf(e) !== keyOf(entry)));
+}
 function clearLocal() { saveLocal([]); }
 
-// 커밋로그 + 로컬임시 합치기(커밋이 우선, 로컬 중복본은 정리)
+// 커밋로그 + 로컬임시 합치기. 브라우저에서 방금 저장한 퀴즈 결과가 우선 보인다.
 function mergeLocal(logEntries) {
-  const logKeys = new Set(logEntries.map(keyOf));
   const local = loadLocal();
-  const kept = local.filter((e) => !logKeys.has(keyOf(e)));
-  if (kept.length !== local.length) saveLocal(kept); // 커밋된 건 로컬에서 제거
-  return [...logEntries, ...kept].sort((a, b) => (a.date < b.date ? -1 : 1));
+  const localKeys = new Set(local.map(keyOf));
+  return [...logEntries.filter((e) => !localKeys.has(keyOf(e))), ...local].sort((a, b) => (a.date < b.date ? -1 : 1));
 }
 
 function refreshData() { ALL = mergeLocal(LOG); }
@@ -191,6 +192,22 @@ function setView(val) {
   renderView(dir);
 }
 
+function activeEntryUser() {
+  return view && view !== ALL_VIEW ? view : null;
+}
+
+function syncActiveUserUi() {
+  const user = activeEntryUser();
+  const quizButton = $("quizOpenBtn");
+  if (quizButton) {
+    quizButton.disabled = !user;
+    quizButton.textContent = user ? `${user} 문제풀기` : "개인 탭에서 문제풀기";
+    quizButton.title = user ? `${user}의 오늘 기록에 반영됩니다` : "가연 또는 소울 탭에서 문제풀이를 시작하세요";
+  }
+  const meta = $("quizModalMeta");
+  if (meta) meta.textContent = user ? `${user}의 오늘 기록으로 자동 반영됩니다.` : "가연 또는 소울 탭에서 시작해주세요.";
+}
+
 /* ── 전환 애니메이션 + 라우팅 ─────────────────────────── */
 function renderView(dir = 1) {
   const root = $("viewRoot");
@@ -198,14 +215,14 @@ function renderView(dir = 1) {
   void root.offsetWidth; // 리플로우 → 애니메이션 재생
   root.classList.add(dir > 0 ? "view-right" : "view-left");
 
-  // 합쳐서 보기 = 비교 전용 → 타이머·입력 카드 숨김, 오답노트만 한 줄로
+  // 합쳐서 보기 = 비교 전용
   const combined = view === ALL_VIEW;
-  $("entryCard").style.display = combined ? "none" : "";
-  $("mainGrid").classList.toggle("solo", combined);
+  $("mainGrid").classList.add("solo");
 
   if (combined) renderCombined();
   else renderUser(view);
   renderCompare();
+  syncActiveUserUi();
 }
 
 function renderAll() {
@@ -226,9 +243,9 @@ function renderUser(user) {
     $("heroDate").innerHTML = `${dot(user)}${escapeHtml(user)} · 아직 기록 없음`;
     ["mTime", "mDumps", "mAcc", "mWrong"].forEach((id) => ($(id).textContent = "–"));
     $("mLecture").textContent = "–";
-    $("mConfusing").textContent = "오른쪽에서 첫 기록을 만들어보세요";
+    $("mConfusing").textContent = "문제풀기 버튼으로 첫 세션을 저장해보세요";
     $("streakNum").textContent = "0";
-    renderWrongNotes(mine, false);
+    renderSummaryNotes(user);
     renderTrend(mine);
     return;
   }
@@ -243,7 +260,7 @@ function renderUser(user) {
   $("mConfusing").textContent = e.confusing || "기록 없음";
 
   $("streakNum").textContent = streakOf(mine);
-  renderWrongNotes(mine, false);
+  renderSummaryNotes(user);
   renderTrend(mine);
 }
 
@@ -257,7 +274,7 @@ function renderCombined() {
     $("mLecture").textContent = "–";
     $("mConfusing").textContent = "아직 기록 없음";
     $("streakNum").textContent = "0";
-    renderWrongNotes([], true);
+    renderSummaryNotes(null);
     renderTrendCombined();
     return;
   }
@@ -288,7 +305,7 @@ function renderCombined() {
   }).join("<br>");
 
   $("streakNum").textContent = streakOf(ALL); // 둘 중 누구든 공부한 연속일
-  renderWrongNotes(ALL, true);                // 두 사람 오답 모두 (이름표)
+  renderSummaryNotes(null);
   renderTrendCombined();                      // 날짜별 두 사람 막대
 }
 
@@ -302,28 +319,79 @@ function streakOf(entries) {
   return streak;
 }
 
-function renderWrongNotes(entries, showUser) {
-  const box = $("wrongList");
-  box.innerHTML = "";
-  const items = [];
-  [...entries].sort((a, b) => (a.date < b.date ? 1 : -1)).forEach((e) => {
-    (e.problems || []).forEach((p) => { if (p.ok === false) items.push({ ...p, date: e.date, user: userOf(e) }); });
-  });
-  $("wrongCount").textContent = items.length ? `${items.length}개` : "";
-  if (!items.length) { box.innerHTML = '<p class="empty">오답 기록이 없어요. 👏</p>'; return; }
+function renderSummaryNotes(user) {
+  const box = $("summaryList");
+  if (!box || !window.SapSummaryNotes) return;
+  const allNotes = window.SapSummaryNotes.loadSummaryNotes(localStorage);
+  const notes = window.SapSummaryNotes.filterSummaryNotes(allNotes, user);
+  const canEdit = !!activeEntryUser();
 
-  items.forEach((p) => {
-    const tag = showUser ? `${dot(p.user)}${escapeHtml(p.user)} · ` : "";
-    const el = document.createElement("div");
-    el.className = "wrong-item";
-    el.innerHTML = `
-      <span class="wrong-id">${escapeHtml(p.id || "?")}</span>
-      <div>
-        <div class="wrong-note">${escapeHtml(p.note || "(메모 없음)")}</div>
-        <div class="wrong-date">${tag}${p.date}</div>
-      </div>`;
-    box.appendChild(el);
+  $("summaryCount").textContent = notes.length ? `${notes.length}개` : "";
+  $("summarySaveBtn").disabled = !canEdit;
+  $("summaryTitle").disabled = !canEdit;
+  $("summaryContent").disabled = !canEdit;
+  $("summaryFile").disabled = !canEdit;
+  if (!canEdit) setSummaryStatus("개인 탭에서 요약을 저장할 수 있어요.");
+
+  box.innerHTML = "";
+  if (!notes.length) {
+    box.innerHTML = '<p class="empty">저장된 요약정리가 없어요.</p>';
+    return;
+  }
+
+  notes.forEach((note, index) => {
+    const detail = document.createElement("details");
+    detail.className = "summary-note";
+    if (index === 0) detail.open = true;
+    const userTag = user ? "" : `${dot(note.user)}${escapeHtml(note.user)} · `;
+    detail.innerHTML = `
+      <summary>
+        <span class="summary-note-title">${escapeHtml(note.title)}</span>
+        <span class="summary-note-meta">${userTag}${escapeHtml(note.date)}</span>
+      </summary>
+      <pre class="summary-note-content">${escapeHtml(note.content)}</pre>
+    `;
+    box.appendChild(detail);
   });
+}
+
+function setSummaryStatus(text, kind = "") {
+  const el = $("summaryStatus");
+  if (!el) return;
+  el.textContent = text;
+  el.className = "hint" + (kind ? " " + kind : "");
+}
+
+async function loadSummaryFile(file) {
+  if (!file) return;
+  const text = await file.text();
+  $("summaryTitle").value = file.name.replace(/\.(md|txt)$/i, "");
+  $("summaryContent").value = text;
+  setSummaryStatus(`${file.name} 불러옴`, "ok");
+}
+
+function saveSummaryNote() {
+  const user = activeEntryUser();
+  if (!user) {
+    setSummaryStatus("가연 또는 소울 탭에서 저장해주세요.", "err");
+    return;
+  }
+  const content = $("summaryContent").value.trim();
+  if (!content) {
+    setSummaryStatus("저장할 요약 내용이 없어요.", "err");
+    return;
+  }
+  const note = window.SapSummaryNotes.createSummaryNote({
+    user,
+    title: $("summaryTitle").value,
+    content,
+  });
+  window.SapSummaryNotes.addSummaryNote(localStorage, note);
+  $("summaryTitle").value = "";
+  $("summaryContent").value = "";
+  $("summaryFile").value = "";
+  setSummaryStatus(`${user} 요약 저장됨`, "ok");
+  renderSummaryNotes(view === ALL_VIEW ? null : user);
 }
 
 function renderTrend(entries) {
@@ -422,6 +490,356 @@ function escapeHtml(s) {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+/* ── DOCX 문제풀이 ───────────────────────────────────── */
+const quiz = {
+  questions: [],
+  current: 0,
+  selected: new Set(),
+  revealed: false,
+  source: "",
+  savedAt: "",
+  attempts: new Map(),
+};
+
+function setQuizStatus(text, kind = "") {
+  const el = $("quizStatus");
+  if (!el) return;
+  el.textContent = text;
+  el.className = "quiz-status" + (kind ? " " + kind : "");
+}
+
+function loadQuizBank(questions, source, savedAt = "") {
+  quiz.questions = Array.isArray(questions) ? questions : [];
+  quiz.current = 0;
+  quiz.selected = new Set();
+  quiz.revealed = false;
+  quiz.source = source || "저장된 문제은행";
+  quiz.savedAt = savedAt;
+  quiz.attempts = new Map();
+  renderQuizBankState();
+}
+
+function renderQuizBankState() {
+  const hasBank = !!quiz.questions.length;
+  $("quizReady")?.classList.toggle("hidden", !hasBank);
+  $("quizPlayArea")?.classList.toggle("hidden", !hasBank);
+  $("quizClearCacheBtn")?.classList.toggle("hidden", !hasBank);
+  if (hasBank) {
+    $("quizCount").textContent = `${quiz.questions.length}문제`;
+    $("quizSource").textContent = ` · ${quiz.source}`;
+    $("quizCacheMeta").textContent = quiz.savedAt ? ` · 저장됨 ${quiz.savedAt.slice(0, 10)}` : "";
+  }
+}
+
+function restoreCachedQuizBank() {
+  if (!window.SapQuizCache) return false;
+  const cached = window.SapQuizCache.loadQuizCache(localStorage);
+  if (!cached) return false;
+  loadQuizBank(cached.questions, cached.source, cached.savedAt);
+  setQuizStatus(`저장된 문제은행 ${cached.count}문제를 불러왔어요.`, "ok");
+  return true;
+}
+
+function clearCachedQuizBank() {
+  window.SapQuizCache?.clearQuizCache(localStorage);
+  quiz.questions = [];
+  quiz.current = 0;
+  quiz.selected = new Set();
+  quiz.revealed = false;
+  quiz.source = "";
+  quiz.savedAt = "";
+  quiz.attempts = new Map();
+  $("quizFile").value = "";
+  renderQuizBankState();
+  renderQuizSavePreview();
+  setQuizStatus("저장된 문제은행을 삭제했어요. DOCX를 다시 선택할 수 있습니다.", "ok");
+}
+
+async function loadQuizDocx(file) {
+  if (!file) return;
+  setQuizStatus("DOCX 읽는 중…", "loading");
+  try {
+    if (!window.JSZip) throw new Error("JSZip을 불러오지 못했어요. 인터넷 연결 또는 CDN 차단 여부를 확인해주세요.");
+    if (!window.SapQuizParser) throw new Error("퀴즈 파서를 불러오지 못했어요.");
+    const questions = await window.SapQuizParser.parseDocxFile(file, window.JSZip);
+    if (!questions.length) throw new Error("문제 패턴을 찾지 못했어요. Q1, Answer: A 형식인지 확인해주세요.");
+
+    const payload = window.SapQuizCache.createQuizCachePayload(file.name, questions);
+    window.SapQuizCache.saveQuizCache(localStorage, payload);
+    loadQuizBank(payload.questions, payload.source, payload.savedAt);
+    $("quizModalMeta").textContent = `${questions.length}문제 · ${file.name} · ${activeEntryUser()} 기록`;
+    setQuizStatus("문제를 불러오고 브라우저에 저장했어요.", "ok");
+    showRandomQuizQuestion();
+  } catch (err) {
+    quiz.questions = [];
+    renderQuizBankState();
+    setQuizStatus("불러오기 실패: " + err.message, "err");
+    renderQuizSavePreview();
+  }
+}
+
+function openQuizModal() {
+  if (!activeEntryUser()) {
+    alert("가연 또는 소울 탭에서 문제풀이를 시작해주세요.");
+    return;
+  }
+  $("quizModal").classList.remove("hidden");
+  document.body.classList.add("modal-open");
+  syncActiveUserUi();
+  if (quiz.questions.length) {
+    renderQuizBankState();
+    if (!quiz.attempts.size) showRandomQuizQuestion();
+    else renderQuizQuestion();
+  } else {
+    renderQuizBankState();
+    if (!restoreCachedQuizBank()) setQuizStatus("DOCX를 선택하면 바로 문제풀이가 시작됩니다.");
+    if (quiz.questions.length) showRandomQuizQuestion();
+    renderQuizSavePreview();
+  }
+}
+
+function closeQuizModal() {
+  $("quizModal").classList.add("hidden");
+  document.body.classList.remove("modal-open");
+}
+
+function showRandomQuizQuestion() {
+  if (!quiz.questions.length) return;
+  quiz.current = Math.floor(Math.random() * quiz.questions.length);
+  quiz.selected = new Set();
+  quiz.revealed = false;
+  renderQuizQuestion();
+}
+
+function jumpQuizQuestion() {
+  const n = parseInt($("quizJump").value, 10);
+  const idx = quiz.questions.findIndex((q) => q.number === n);
+  if (idx < 0) {
+    setQuizStatus(`Q${isNaN(n) ? "?" : n} 문제를 찾지 못했어요.`, "err");
+    return;
+  }
+  quiz.current = idx;
+  quiz.selected = new Set();
+  quiz.revealed = false;
+  setQuizStatus("문제를 이동했어요.", "ok");
+  renderQuizQuestion();
+}
+
+function toggleQuizOption(label) {
+  if (quiz.revealed) return;
+  if (quiz.selected.has(label)) quiz.selected.delete(label);
+  else quiz.selected.add(label);
+  renderQuizQuestion();
+}
+
+function renderQuizQuestion() {
+  const q = quiz.questions[quiz.current];
+  if (!q) return;
+
+  $("quizNumber").textContent = `Q${q.number}`;
+  $("quizProgress").textContent = `${quiz.current + 1} / ${quiz.questions.length}`;
+  $("quizPrompt").textContent = q.prompt;
+
+  const options = $("quizOptions");
+  options.innerHTML = "";
+  Object.entries(q.options).forEach(([label, text]) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "quiz-option";
+    if (quiz.selected.has(label)) btn.classList.add("selected");
+    if (quiz.revealed && q.answer.includes(label)) btn.classList.add("correct");
+    if (quiz.revealed && quiz.selected.has(label) && !q.answer.includes(label)) btn.classList.add("wrong");
+    btn.innerHTML = `<span>${label}</span><b></b>`;
+    btn.querySelector("b").textContent = text;
+    btn.addEventListener("click", () => toggleQuizOption(label));
+    options.appendChild(btn);
+  });
+
+  const answer = $("quizAnswer");
+  const attempt = quiz.attempts.get(q.number);
+  answer.classList.toggle("hidden", !quiz.revealed);
+  answer.innerHTML = "";
+  if (quiz.revealed) {
+    const isWrong = attempt && !attempt.correct;
+    answer.innerHTML = `
+      <div><strong>정답: ${escapeHtml(q.answer.join(", "))}</strong></div>
+      ${q.link ? `<div class="quiz-link"><a href="${escapeHtml(q.link)}" target="_blank" rel="noopener">토론 링크 열기</a></div>` : ""}
+      ${q.explanation ? `<p>${escapeHtml(q.explanation)}</p>` : `<p class="muted">설명이 없는 문제입니다.</p>`}
+      ${isWrong ? `
+        <label class="quiz-wrong-note">
+          <span>왜 틀렸는지 메모</span>
+          <textarea id="quizWrongMemo" rows="3" placeholder="예: 조건에서 Multi-AZ가 아니라 read replica를 묻고 있었음">${escapeHtml(attempt.note || "")}</textarea>
+        </label>` : ""}
+    `;
+    $("quizWrongMemo")?.addEventListener("input", (ev) => {
+      const current = quiz.attempts.get(q.number);
+      if (!current) return;
+      current.note = ev.target.value;
+      quiz.attempts.set(q.number, current);
+      renderQuizSavePreview();
+    });
+  }
+  renderQuizSessionStats();
+}
+
+function revealQuizAnswer() {
+  const q = quiz.questions[quiz.current];
+  if (!q) return;
+  quiz.revealed = true;
+  const selected = [...quiz.selected].sort();
+  const correct = window.SapQuizSession.isCorrectAnswer(selected, q.answer);
+  quiz.attempts.set(q.number, {
+    number: q.number,
+    selected,
+    answer: q.answer,
+    correct,
+    note: quiz.attempts.get(q.number)?.note || "",
+  });
+  setQuizApplyButtonEnabled(true);
+  renderQuizQuestion();
+}
+
+function renderQuizSessionStats() {
+  const summary = window.SapQuizSession.summarizeAttempts(quiz.attempts);
+  $("quizSessionSolved").textContent = `푼 문제 ${summary.dumps}`;
+  $("quizSessionCorrect").textContent = `정답 ${summary.correct}`;
+  $("quizSessionAccuracy").textContent = summary.dumps ? `정답률 ${Math.round((summary.correct / summary.dumps) * 100)}%` : "정답률 –";
+  renderQuizSavePreview();
+}
+
+function renderQuizSavePreview() {
+  const button = $("quizApplyBtn");
+  const preview = $("quizSavePreview");
+  if (!button || !preview) return;
+
+  let state;
+  try {
+    state = buildQuizSavePreviewState();
+  } catch (err) {
+    state = {
+      disabled: !quiz.attempts.size,
+      lines: quiz.attempts.size
+        ? [`푼 문제 ${quiz.attempts.size}개`, "세션 저장을 누르면 오늘 기록에 반영돼요."]
+        : ["정답 보기를 누른 문제부터 저장할 수 있어요."],
+    };
+  }
+  setQuizApplyButtonEnabled(!state.disabled);
+  button.title = state.lines.join("\n");
+  preview.innerHTML = `
+    <strong>${state.disabled ? "아직 저장할 세션이 없어요" : "세션 저장 미리보기"}</strong>
+    ${state.lines.map((line) => `<span>${escapeHtml(line)}</span>`).join("")}
+  `;
+}
+
+function setQuizApplyButtonEnabled(enabled) {
+  const button = $("quizApplyBtn");
+  if (!button) return;
+  button.disabled = !enabled;
+}
+
+function buildQuizSavePreviewState() {
+  if (window.SapQuizSession?.buildSavePreview) {
+    return window.SapQuizSession.buildSavePreview(quiz.attempts);
+  }
+
+  const summary = window.SapQuizSession.summarizeAttempts(quiz.attempts);
+  if (!summary.dumps) {
+    return { disabled: true, lines: ["정답 보기를 누른 문제부터 저장할 수 있어요."] };
+  }
+  const wrongLines = window.SapQuizSession.buildWrongProblemLines(quiz.attempts);
+  return {
+    disabled: false,
+    lines: [
+      `푼 문제 ${summary.dumps}개`,
+      `정답 ${summary.correct}개 · 오답 ${summary.wrong}개`,
+      ...wrongLines.slice(0, 3).map((line) => `오답: ${line}`),
+      ...(wrongLines.length > 3 ? [`오답 ${wrongLines.length - 3}개 더 있음`] : []),
+    ],
+  };
+}
+
+function todayEntryFor(user) {
+  const date = todayStr();
+  return ALL.find((entry) => userOf(entry) === user && entry.date === date)
+    || LOG.find((entry) => userOf(entry) === user && entry.date === date)
+    || { user, date };
+}
+
+async function saveQuizEntry(entry) {
+  upsertLocal(entry);
+  refreshData();
+  view = userOf(entry);
+  renderAll();
+  updateLocalBadge();
+
+  if (!ghToken()) {
+    setCommitStatus("브라우저에 저장됨 · 깃 토큰을 연결하면 자동 커밋돼요", "");
+    return;
+  }
+
+  setCommitStatus("깃 커밋 중...", "pending");
+  try {
+    await commitEntry(entry);
+    removeLocal(entry);
+    refreshData();
+    renderAll();
+    updateLocalBadge();
+    setCommitStatus("깃에 커밋됨 · 다른 사람도 새로고침하면 보여요", "ok");
+  } catch (err) {
+    setCommitStatus("자동 커밋 실패: " + err.message + " · 브라우저 임시 기록에는 저장됐어요", "err");
+  }
+}
+
+async function applyQuizSessionToEntry() {
+  const user = activeEntryUser();
+  if (!user) {
+    setQuizStatus("가연 또는 소울 탭에서만 기록에 반영할 수 있어요.", "err");
+    return;
+  }
+  const summary = window.SapQuizSession.summarizeAttempts(quiz.attempts);
+  if (!summary.dumps) {
+    setQuizStatus("아직 정답 보기를 누른 문제가 없어서 반영할 기록이 없어요.", "err");
+    return;
+  }
+
+  const wrongLines = window.SapQuizSession.buildWrongProblemLines(quiz.attempts);
+  const entry = window.SapQuizSession.applyQuizSummaryToEntry(todayEntryFor(user), { ...summary, wrongLines });
+  await saveQuizEntry(entry);
+
+  setQuizStatus(`${user} 오늘 기록에 ${summary.dumps}문제, 정답 ${summary.correct}개를 저장했어요.`, "ok");
+  quiz.attempts = new Map();
+  renderQuizSessionStats();
+  closeQuizModal();
+  document.querySelector(".hero")?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function initQuiz() {
+  $("quizFile")?.addEventListener("change", (ev) => loadQuizDocx(ev.target.files[0]));
+  $("quizClearCacheBtn")?.addEventListener("click", clearCachedQuizBank);
+  $("quizOpenBtn")?.addEventListener("click", openQuizModal);
+  $("quizCloseBtn")?.addEventListener("click", closeQuizModal);
+  $("quizModalBackdrop")?.addEventListener("click", closeQuizModal);
+  $("quizRandomBtn")?.addEventListener("click", showRandomQuizQuestion);
+  $("quizNextBtn")?.addEventListener("click", showRandomQuizQuestion);
+  $("quizRevealBtn")?.addEventListener("click", revealQuizAnswer);
+  $("quizApplyBtn")?.addEventListener("click", applyQuizSessionToEntry);
+  $("quizJumpBtn")?.addEventListener("click", jumpQuizQuestion);
+  $("quizJump")?.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") jumpQuizQuestion();
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && !$("quizModal").classList.contains("hidden")) closeQuizModal();
+  });
+  restoreCachedQuizBank();
+}
+
+function initSummaryNotes() {
+  $("summaryFile")?.addEventListener("change", (ev) => {
+    loadSummaryFile(ev.target.files[0]).catch((err) => setSummaryStatus("파일 읽기 실패: " + err.message, "err"));
+  });
+  $("summarySaveBtn")?.addEventListener("click", saveSummaryNote);
+}
+
 /* ── 데이터 로드 ──────────────────────────────────────── */
 async function load() {
   try {
@@ -431,13 +849,13 @@ async function load() {
     refreshData();
     renderAll();
   } catch (err) {
-    console.warn("로그 fetch 실패 (file:// 환경일 수 있음):", err.message);
+    console.warn("기록 fetch 실패 (file:// 환경일 수 있음):", err.message);
     // 커밋로그를 못 읽어도 로컬 임시저장만으로 토글·대시보드는 보여줌
     LOG = [];
     refreshData();
     renderAll();
     $("loadFallback").classList.remove("hidden");
-    $("filePicker").addEventListener("change", (ev) => {
+    $("filePicker")?.addEventListener("change", (ev) => {
       const file = ev.target.files[0];
       if (!file) return;
       const reader = new FileReader();
@@ -445,43 +863,6 @@ async function load() {
       reader.readAsText(file);
     });
   }
-}
-
-/* ── 타이머 ───────────────────────────────────────────── */
-let timerSec = 0, timerId = null;
-function paintTimer() {
-  const h = Math.floor(timerSec / 3600), m = Math.floor((timerSec % 3600) / 60), s = timerSec % 60;
-  $("timerDisplay").textContent = `${pad(h)}:${pad(m)}:${pad(s)}`;
-}
-function startTimer() { if (!timerId) timerId = setInterval(() => { timerSec++; paintTimer(); }, 1000); }
-function pauseTimer() { clearInterval(timerId); timerId = null; $("fStudyMin").value = Math.round(timerSec / 60); }
-function resetTimer() { pauseTimer(); timerSec = 0; paintTimer(); }
-
-/* ── 입력폼 → JSONL 한 줄 ─────────────────────────────── */
-function parseProblems(text) {
-  return text.split("\n").map((l) => l.trim()).filter(Boolean).map((line) => {
-    const m = line.match(/^(\S+)\s+([oOxX])\s*(.*)$/);
-    if (!m) return { id: line, ok: false, note: "" };
-    return { id: m[1], ok: /[oO]/.test(m[2]), note: m[3].trim() };
-  });
-}
-function buildEntry() {
-  const studyMin = parseInt($("fStudyMin").value, 10);
-  const dumps = parseInt($("fDumps").value, 10);
-  const correct = parseInt($("fCorrect").value, 10);
-  const problems = parseProblems($("fProblems").value);
-
-  const entry = {};
-  entry.user = $("fUser").value.trim() || (view && view !== ALL_VIEW ? view : USERS[0]) || "나";
-  entry.date = todayStr();
-  if (!isNaN(studyMin)) entry.studyMin = studyMin;
-  else if (timerSec > 0) entry.studyMin = Math.round(timerSec / 60);
-  if ($("fLecture").value.trim()) entry.lecture = $("fLecture").value.trim();
-  if (!isNaN(dumps)) entry.dumps = dumps;
-  if (!isNaN(correct)) entry.correct = correct;
-  if (problems.length) entry.problems = problems;
-  if ($("fConfusing").value.trim()) entry.confusing = $("fConfusing").value.trim();
-  return entry;
 }
 
 function updateLocalBadge() {
@@ -495,44 +876,9 @@ function updateLocalBadge() {
 
 /* ── 초기화 ───────────────────────────────────────────── */
 function init() {
-  paintTimer();
-  $("tStart").addEventListener("click", startTimer);
-  $("tPause").addEventListener("click", pauseTimer);
-  $("tReset").addEventListener("click", resetTimer);
+  initQuiz();
+  initSummaryNotes();
   window.addEventListener("resize", moveIndicator);
-
-  $("entryForm").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const entry = buildEntry();
-    $("outLine").textContent = JSON.stringify(entry);
-
-    // 1) 화면 즉시 반영 (해당 사람 뷰로 이동) + 이 브라우저 저장
-    upsertLocal(entry);
-    refreshData();
-    view = userOf(entry);
-    renderAll();
-    updateLocalBadge();
-
-    // 2) 토큰 있으면 자동 커밋(동적처럼), 없으면 복붙용 줄 노출
-    if (ghToken()) {
-      $("outBox").classList.add("hidden");
-      setCommitStatus("⏳ 깃 커밋 중…", "pending");
-      try {
-        await commitEntry(entry);
-        refreshData();        // 커밋본이 LOG 로, 로컬 임시본 자동 정리
-        renderAll();
-        updateLocalBadge();
-        setCommitStatus("✓ 깃에 커밋됨 — 소울도 새로고침하면 보여요", "ok");
-      } catch (err) {
-        setCommitStatus("⚠ 자동 커밋 실패: " + err.message + " — 아래 줄을 수동 커밋하세요", "err");
-        $("outBox").classList.remove("hidden");
-      }
-    } else {
-      setCommitStatus("", "");
-      $("outBox").classList.remove("hidden");
-      $("outBox").scrollIntoView({ behavior: "smooth", block: "nearest" });
-    }
-  });
 
   $("ghSaveBtn")?.addEventListener("click", () => {
     const t = $("ghToken").value.trim();
@@ -540,7 +886,7 @@ function init() {
     localStorage.setItem(GH_TOKEN_KEY, t);
     $("ghToken").value = "";
     updateGhState();
-    setCommitStatus("✓ 토큰 저장됨 — 이제 '오늘 기록 추가'가 자동 커밋돼요", "ok");
+    setCommitStatus("토큰 저장됨 · 이제 문제풀이 세션 저장이 자동 커밋돼요", "ok");
   });
   $("ghClearBtn")?.addEventListener("click", () => {
     localStorage.removeItem(GH_TOKEN_KEY);
@@ -549,25 +895,12 @@ function init() {
   });
 
   $("clearLocalBtn")?.addEventListener("click", () => {
-    if (!confirm("이 브라우저에 임시 저장된 기록을 모두 지울까요?\n(커밋한 study-log.jsonl 데이터는 그대로예요)")) return;
+    if (!confirm("이 브라우저에 임시 저장된 기록을 모두 지울까요?\n(이미 동기화된 기록은 그대로예요)")) return;
     clearLocal();
     refreshData();
     renderAll();
     updateLocalBadge();
   });
-
-  $("copyBtn").addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText($("outLine").textContent);
-      $("copyBtn").textContent = "✅ 복사됨";
-      setTimeout(() => ($("copyBtn").textContent = "📋 복사"), 1500);
-    } catch {
-      const range = document.createRange();
-      range.selectNodeContents($("outLine"));
-      const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range);
-    }
-  });
-
   load();
   updateLocalBadge();
   updateGhState();
