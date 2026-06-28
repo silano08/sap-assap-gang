@@ -8,12 +8,14 @@
 =================================================================== */
 
 const LOG_FILE = "study-log.jsonl";
+const SUMMARY_FILE = "summary-notes.json";
 const ALL_VIEW = "__ALL__";
 const DEFAULT_USERS = ["가연", "소울"]; // 로그가 비어도 토글에 항상 표시
 const PALETTE = ["#ff9900", "#2f6fed", "#1a8754", "#c026d3"]; // 유저별 색
 
 let ALL = [];        // 화면에 쓰는 전체 = 커밋로그 + 로컬임시
 let LOG = [];        // 커밋된 로그(study-log.jsonl)만
+let REMOTE_SUMMARIES = [];
 let USERS = [];      // 정렬된 유저 목록
 let view = null;     // 현재 보기: 유저명 또는 ALL_VIEW
 let segOrder = [];   // 토글 버튼 순서(값) — 전환 방향 계산용
@@ -81,7 +83,7 @@ function refreshData() { ALL = mergeLocal(LOG); }
    정적사이트지만 브라우저가 GitHub REST API 로 직접 커밋.
    토큰은 이 브라우저(localStorage)에만 저장 — 코드/깃엔 절대 없음.
    토큰은 fine-grained, 이 레포만 Contents:RW 권장. ============= */
-const GH = { owner: "silano08", repo: "sap-assap-gang", branch: "main", path: "study-log.jsonl" };
+const GH = { owner: "silano08", repo: "sap-assap-gang", branch: "main" };
 const GH_TOKEN_KEY = "sap-gh-token";
 const ghToken = () => localStorage.getItem(GH_TOKEN_KEY) || "";
 const ghHeaders = () => ({
@@ -105,8 +107,8 @@ function upsertLineInText(raw, entry) {
   return kept.join("\n") + "\n";
 }
 
-async function ghGetFile() {
-  const url = `https://api.github.com/repos/${GH.owner}/${GH.repo}/contents/${GH.path}?ref=${GH.branch}`;
+async function ghGetFile(path) {
+  const url = `https://api.github.com/repos/${GH.owner}/${GH.repo}/contents/${path}?ref=${GH.branch}`;
   const res = await fetch(url, { headers: ghHeaders(), cache: "no-store" });
   if (res.status === 404) return { sha: null, text: "" };
   if (!res.ok) throw new Error(res.status === 401 ? "토큰 권한/만료 확인" : "GET " + res.status);
@@ -114,8 +116,8 @@ async function ghGetFile() {
   return { sha: j.sha, text: b64decode(j.content || "") };
 }
 
-async function ghPutFile(text, sha, message) {
-  const url = `https://api.github.com/repos/${GH.owner}/${GH.repo}/contents/${GH.path}`;
+async function ghPutFile(path, text, sha, message) {
+  const url = `https://api.github.com/repos/${GH.owner}/${GH.repo}/contents/${path}`;
   const body = { message, content: b64encode(text), branch: GH.branch };
   if (sha) body.sha = sha;
   return fetch(url, { method: "PUT", headers: ghHeaders(), body: JSON.stringify(body) });
@@ -124,11 +126,65 @@ async function ghPutFile(text, sha, message) {
 // 최신본 받아 → 줄 교체 → 커밋. 충돌(409)나면 한 번 재시도.
 async function commitEntry(entry) {
   for (let attempt = 0; attempt < 2; attempt++) {
-    const { sha, text } = await ghGetFile();
+    const { sha, text } = await ghGetFile(LOG_FILE);
     const newText = upsertLineInText(text, entry);
-    const res = await ghPutFile(newText, sha, `log: ${userOf(entry)} ${entry.date}`);
+    const res = await ghPutFile(LOG_FILE, newText, sha, `log: ${userOf(entry)} ${entry.date}`);
     if (res.ok) { LOG = parseLog(newText); return true; }
     if (res.status === 409) continue; // 다른 사람이 먼저 커밋 → 다시
+    throw new Error(res.status === 401 ? "토큰 권한/만료 확인" : "HTTP " + res.status);
+  }
+  throw new Error("커밋 충돌 — 다시 눌러줘");
+}
+
+function parseSummaryJson(text) {
+  try {
+    const parsed = JSON.parse(text || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function summaryNotesForDisplay() {
+  return window.SapSummaryNotes.mergeSummaryNotes(REMOTE_SUMMARIES, window.SapSummaryNotes.loadSummaryNotes(localStorage));
+}
+
+function writeLocalSummaryNotes(notes) {
+  localStorage.setItem(window.SapSummaryNotes.KEY, JSON.stringify(notes));
+}
+
+async function commitSummaryNotes(nextNotes, message) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { sha, text } = await ghGetFile(SUMMARY_FILE);
+    const remote = parseSummaryJson(text);
+    const merged = window.SapSummaryNotes.mergeSummaryNotes(remote, nextNotes);
+    const newText = JSON.stringify(merged, null, 2) + "\n";
+    const res = await ghPutFile(SUMMARY_FILE, newText, sha, message);
+    if (res.ok) {
+      REMOTE_SUMMARIES = merged;
+      writeLocalSummaryNotes(merged);
+      return true;
+    }
+    if (res.status === 409) continue;
+    throw new Error(res.status === 401 ? "토큰 권한/만료 확인" : "HTTP " + res.status);
+  }
+  throw new Error("커밋 충돌 — 다시 눌러줘");
+}
+
+async function commitSummaryDelete(id) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { sha, text } = await ghGetFile(SUMMARY_FILE);
+    const remote = parseSummaryJson(text);
+    const local = window.SapSummaryNotes.loadSummaryNotes(localStorage);
+    const merged = window.SapSummaryNotes.mergeSummaryNotes(remote, local).filter((note) => note.id !== id);
+    const newText = JSON.stringify(merged, null, 2) + "\n";
+    const res = await ghPutFile(SUMMARY_FILE, newText, sha, "notes: delete summary");
+    if (res.ok) {
+      REMOTE_SUMMARIES = merged;
+      writeLocalSummaryNotes(merged);
+      return true;
+    }
+    if (res.status === 409) continue;
     throw new Error(res.status === 401 ? "토큰 권한/만료 확인" : "HTTP " + res.status);
   }
   throw new Error("커밋 충돌 — 다시 눌러줘");
@@ -321,7 +377,7 @@ function streakOf(entries) {
 function renderSummaryNotes(user) {
   const box = $("summaryList");
   if (!box || !window.SapSummaryNotes) return;
-  const allNotes = window.SapSummaryNotes.loadSummaryNotes(localStorage);
+  const allNotes = summaryNotesForDisplay();
   const notes = window.SapSummaryNotes.filterSummaryNotes(allNotes, user);
   const canEdit = !!activeEntryUser();
 
@@ -346,10 +402,14 @@ function renderSummaryNotes(user) {
     detail.innerHTML = `
       <summary>
         <span class="summary-note-title">${escapeHtml(note.title)}</span>
-        <span class="summary-note-meta">${userTag}${escapeHtml(note.date)}</span>
+        <span class="summary-note-side">
+          <span class="summary-note-meta">${userTag}${escapeHtml(note.date)}</span>
+          <button class="summary-delete-btn" type="button" data-summary-delete="${escapeHtml(note.id)}" aria-label="${escapeHtml(note.title)} 삭제">삭제</button>
+        </span>
       </summary>
-      <pre class="summary-note-content">${escapeHtml(note.content)}</pre>
+      <div class="summary-note-content">${window.SapSummaryNotes.markdownToHtml(note.content)}</div>
     `;
+    detail.querySelector("[data-summary-delete]")?.addEventListener("click", deleteSummaryNote);
     box.appendChild(detail);
   });
 }
@@ -369,7 +429,18 @@ async function loadSummaryFile(file) {
   setSummaryStatus(`${file.name} 불러옴`, "ok");
 }
 
-function saveSummaryNote() {
+async function loadRemoteSummaries() {
+  try {
+    const res = await fetch(SUMMARY_FILE + "?v=" + Date.now(), { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    REMOTE_SUMMARIES = parseSummaryJson(await res.text());
+  } catch (err) {
+    console.warn("요약정리 fetch 실패:", err.message);
+    REMOTE_SUMMARIES = [];
+  }
+}
+
+async function saveSummaryNote() {
   const user = activeEntryUser();
   if (!user) {
     setSummaryStatus("가연 또는 소울 탭에서 저장해주세요.", "err");
@@ -386,11 +457,47 @@ function saveSummaryNote() {
     content,
   });
   window.SapSummaryNotes.addSummaryNote(localStorage, note);
+  let synced = false;
+  if (ghToken()) {
+    setSummaryStatus("요약 저장 중...", "pending");
+    try {
+      const nextNotes = window.SapSummaryNotes.upsertSummaryNote(summaryNotesForDisplay(), note);
+      await commitSummaryNotes(nextNotes, `notes: ${user} ${note.title}`);
+      synced = true;
+    } catch (err) {
+      setSummaryStatus("원격 저장 실패: " + err.message + " · 브라우저에는 저장됐어요", "err");
+    }
+  }
   $("summaryTitle").value = "";
   $("summaryContent").value = "";
   $("summaryFile").value = "";
-  setSummaryStatus(`${user} 요약 저장됨`, "ok");
+  if (!ghToken()) setSummaryStatus(`${user} 요약 저장됨 · 토큰 연결 시 원격에도 반영돼요`, "ok");
+  else if (synced) setSummaryStatus(`${user} 요약 저장됨 · 원격 반영 완료`, "ok");
   renderSummaryNotes(view === ALL_VIEW ? null : user);
+}
+
+async function deleteSummaryNote(ev) {
+  ev.preventDefault();
+  ev.stopPropagation();
+  const id = ev.currentTarget.dataset.summaryDelete;
+  if (!id) return;
+  if (!confirm("이 요약정리를 삭제할까요?")) return;
+  const nextNotes = summaryNotesForDisplay().filter((note) => note.id !== id);
+  if (nextNotes.length === summaryNotesForDisplay().length) return;
+  REMOTE_SUMMARIES = REMOTE_SUMMARIES.filter((note) => note.id !== id);
+  writeLocalSummaryNotes(nextNotes);
+  if (ghToken()) {
+    setSummaryStatus("요약정리 삭제 중...", "pending");
+    try {
+      await commitSummaryDelete(id);
+      setSummaryStatus("요약정리를 삭제하고 원격에도 반영했어요.", "ok");
+    } catch (err) {
+      setSummaryStatus("원격 삭제 실패: " + err.message + " · 브라우저에서는 삭제됐어요", "err");
+    }
+  } else {
+    setSummaryStatus("요약정리를 삭제했어요 · 토큰 연결 시 원격에도 반영돼요.", "ok");
+  }
+  renderSummaryNotes(activeEntryUser());
 }
 
 function renderTrend(entries) {
@@ -842,6 +949,7 @@ function initSummaryNotes() {
 /* ── 데이터 로드 ──────────────────────────────────────── */
 async function load() {
   try {
+    await loadRemoteSummaries();
     const res = await fetch(LOG_FILE + "?v=" + Date.now());
     if (!res.ok) throw new Error("HTTP " + res.status);
     LOG = parseLog(await res.text());
@@ -849,6 +957,7 @@ async function load() {
     renderAll();
   } catch (err) {
     console.warn("기록 fetch 실패 (file:// 환경일 수 있음):", err.message);
+    await loadRemoteSummaries();
     // 커밋로그를 못 읽어도 로컬 임시저장만으로 토글·대시보드는 보여줌
     LOG = [];
     refreshData();
