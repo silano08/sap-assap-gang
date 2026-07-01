@@ -5,4 +5,4 @@
 {"user":"소울","date":"2026-06-22","studyMin":0,"lecture":"AA","dumps":0,"correct":0,"problems":[{"id":"안녕하세요","ok":false,"note":""}],"confusing":"안녕하세요"}
 {"user":"가연","date":"2026-06-23","studyMin":3,"lecture":"IAM 보는중","dumps":0,"correct":0,"problems":[{"id":"https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_examples.html","ok":false,"note":""},{"id":"아니 브라우저에서 시작버튼을 안누름","ok":false,"note":""}]}
 {"user":"가연","date":"2026-06-30","dumps":4,"correct":1,"problems":[{"id":"Q20 x 선택 D / 정답 A / 메모 왜지 글리시어가 가성비인줄알엇는디;;;;\n아 가성비뿐만아니라 데이터를 자주 검색하는< 이게문제였구나","ok":false,"note":""},{"id":"Q110","ok":false,"note":"선택 D / 정답 A"},{"id":"Q205","ok":false,"note":"선택 A, D, E / 정답 A, C, E / 메모 이건억울하다"}]}
-{"user":"가연","date":"2026-07-01","studyMin":53}
+{"user":"가연","date":"2026-07-01","studyMin":55}
