@@ -612,16 +612,17 @@ function startStudyTimer() {
 
 async function stopStudyTimer() {
   if (!window.SapStudyTimer) return;
-  const stopped = window.SapStudyTimer.stopTimer(localStorage);
-  if (!stopped || !stopped.user) return;
-  if (stopped.elapsedMin <= 0) {
+  const timer = window.SapStudyTimer.loadTimer(localStorage);
+  if (!timer || !timer.user) return;
+  const elapsedMin = window.SapStudyTimer.elapsedMinutes(timer.startedAt);
+  if (elapsedMin <= 0) {
     renderTimer();
     return;
   }
-  const entry = todayEntryFor(stopped.user);
-  entry.studyMin = (entry.studyMin || 0) + stopped.elapsedMin;
+  const entry = todayEntryFor(timer.user);
+  entry.studyMin = (entry.studyMin || 0) + elapsedMin;
   await saveQuizEntry(entry);
-  setCommitStatus(`${stopped.user} 순공시간 ${fmtMinutes(stopped.elapsedMin)} 저장됨`, "ok");
+  window.SapStudyTimer.clearTimer(localStorage);
   renderTimer();
 }
 

@@ -43,6 +43,15 @@ test("stopTimer calculates elapsed minutes from stored start time", () => {
   assert.equal(loadTimer(storage), null);
 });
 
+test("stopTimer preserves short sessions as at least one minute", () => {
+  const storage = fakeStorage();
+  startTimer(storage, "가연", "2026-07-01T10:00:00.000Z");
+
+  const result = stopTimer(storage, "2026-07-01T10:00:12.000Z");
+
+  assert.equal(result.elapsedMin, 1);
+});
+
 test("clearTimer removes a running session", () => {
   const storage = fakeStorage();
   startTimer(storage, "가연", "2026-07-01T10:00:00.000Z");
