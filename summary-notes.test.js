@@ -11,6 +11,11 @@ const {
   removeSummaryNote,
   mergeSummaryNotes,
   upsertSummaryNote,
+  markSummaryNoteDeleted,
+  filterDeletedSummaryNotes,
+  filterSummaryNotesBySection,
+  MISC_SECTION_ID,
+  updateSummaryNote,
 } = require("./summary-notes");
 
 function fakeStorage(seed = {}) {
@@ -41,11 +46,12 @@ test("addSummaryNote stores notes newest first and keeps the selected user", () 
 });
 
 test("createSummaryNote falls back to a date title and trims content", () => {
-  const note = createSummaryNote({ user: "가연", title: "", content: "  내용  ", now: "2026-06-28T03:00:00.000Z" });
+  const note = createSummaryNote({ user: "가연", title: "", sectionId: "section-3", content: "  내용  ", now: "2026-06-28T03:00:00.000Z" });
 
   assert.equal(note.title, "2026-06-28 요약");
   assert.equal(note.content, "내용");
   assert.equal(note.date, "2026-06-28");
+  assert.equal(note.sectionId, "section-3");
 });
 
 test("clearSummaryNotes removes stored summaries", () => {
@@ -65,6 +71,40 @@ test("removeSummaryNote deletes only the matching note id", () => {
   assert.equal(removeSummaryNote(storage, "delete"), true);
 
   assert.deepEqual(loadSummaryNotes(storage).map((note) => note.id), ["keep"]);
+});
+
+test("deleted summary ids hide remote notes after refresh", () => {
+  const storage = fakeStorage();
+  const notes = [
+    { id: "remote", user: "가연", date: "2026-06-28", sectionId: "section-3", title: "원격", content: "remote", createdAt: "2026-06-28T01:00:00.000Z" },
+    { id: "keep", user: "가연", date: "2026-06-28", sectionId: "section-4", title: "유지", content: "keep", createdAt: "2026-06-28T02:00:00.000Z" },
+  ];
+
+  markSummaryNoteDeleted(storage, "remote");
+
+  assert.deepEqual(filterDeletedSummaryNotes(notes, storage).map((note) => note.id), ["keep"]);
+});
+
+test("filterSummaryNotesBySection keeps notes under their lecture section", () => {
+  const notes = [
+    { id: "s3", user: "가연", sectionId: "section-3", title: "IAM", content: "iam", createdAt: "2026-06-28T01:00:00.000Z" },
+    { id: "s4", user: "가연", sectionId: "section-4", title: "KMS", content: "kms", createdAt: "2026-06-28T02:00:00.000Z" },
+  ];
+
+  assert.deepEqual(filterSummaryNotesBySection(notes, "section-3").map((note) => note.id), ["s3"]);
+});
+
+test("legacy summary notes without sectionId are treated as misc", () => {
+  const storage = fakeStorage();
+  storage.setItem("sap-summary-notes-v1", JSON.stringify([
+    { id: "legacy", user: "가연", date: "2026-06-28", title: "예전 요약", content: "legacy", createdAt: "2026-06-28T01:00:00.000Z" },
+  ]));
+
+  const notes = loadSummaryNotes(storage);
+
+  assert.equal(MISC_SECTION_ID, "misc");
+  assert.equal(notes[0].sectionId, "misc");
+  assert.deepEqual(filterSummaryNotesBySection(notes, "misc").map((note) => note.id), ["legacy"]);
 });
 
 test("mergeSummaryNotes combines remote and local notes by id with local winning", () => {
@@ -92,6 +132,35 @@ test("upsertSummaryNote inserts newest note first and replaces matching id", () 
 
   assert.deepEqual(inserted.map((note) => note.id), ["new", "old"]);
   assert.equal(replaced.find((note) => note.id === "old").title, "수정");
+});
+
+test("updateSummaryNote preserves id and owner while changing editable fields", () => {
+  const notes = [
+    {
+      id: "note-1",
+      user: "가연",
+      date: "2026-06-28",
+      sectionId: "section-3",
+      title: "IAM",
+      content: "old",
+      createdAt: "2026-06-28T01:00:00.000Z",
+    },
+  ];
+
+  const updated = updateSummaryNote(notes, "note-1", {
+    sectionId: "misc",
+    title: "수정한 요약",
+    content: "new",
+    now: "2026-07-01T01:00:00.000Z",
+  });
+
+  assert.equal(updated[0].id, "note-1");
+  assert.equal(updated[0].user, "가연");
+  assert.equal(updated[0].date, "2026-06-28");
+  assert.equal(updated[0].sectionId, "misc");
+  assert.equal(updated[0].title, "수정한 요약");
+  assert.equal(updated[0].content, "new");
+  assert.equal(updated[0].updatedAt, "2026-07-01T01:00:00.000Z");
 });
 
 test("markdownToHtml renders common markdown blocks safely", () => {

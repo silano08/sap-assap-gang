@@ -19,6 +19,7 @@ let REMOTE_SUMMARIES = [];
 let USERS = [];      // 정렬된 유저 목록
 let view = null;     // 현재 보기: 유저명 또는 ALL_VIEW
 let segOrder = [];   // 토글 버튼 순서(값) — 전환 방향 계산용
+let summaryEditingId = null;
 
 const LS_KEY = "sap-local-entries-v1"; // 이 브라우저 임시 저장
 
@@ -146,7 +147,8 @@ function parseSummaryJson(text) {
 }
 
 function summaryNotesForDisplay() {
-  return window.SapSummaryNotes.mergeSummaryNotes(REMOTE_SUMMARIES, window.SapSummaryNotes.loadSummaryNotes(localStorage));
+  const merged = window.SapSummaryNotes.mergeSummaryNotes(REMOTE_SUMMARIES, window.SapSummaryNotes.loadSummaryNotes(localStorage));
+  return window.SapSummaryNotes.filterDeletedSummaryNotes(merged, localStorage);
 }
 
 function writeLocalSummaryNotes(notes) {
@@ -262,6 +264,8 @@ function syncActiveUserUi() {
   }
   const meta = $("quizModalMeta");
   if (meta) meta.textContent = user ? `${user}의 오늘 기록으로 자동 반영됩니다.` : "가연 또는 소울 탭에서 시작해주세요.";
+  renderTimer();
+  renderStudyPlan();
 }
 
 /* ── 전환 애니메이션 + 라우팅 ─────────────────────────── */
@@ -299,7 +303,7 @@ function renderUser(user) {
   if (!e) { // 아직 이 사람 기록이 없음
     $("heroDate").innerHTML = `${dot(user)}${escapeHtml(user)} · 아직 기록 없음`;
     ["mTime", "mDumps", "mAcc", "mWrong"].forEach((id) => ($(id).textContent = "–"));
-    $("mLecture").textContent = "–";
+    $("mLecture").textContent = progressLabel(user);
     $("mConfusing").textContent = "문제풀기 버튼으로 첫 세션을 저장해보세요";
     $("streakNum").textContent = "0";
     renderSummaryNotes(user);
@@ -313,7 +317,7 @@ function renderUser(user) {
   const acc = e.dumps ? Math.round((e.correct / e.dumps) * 100) : null;
   $("mAcc").textContent = acc === null ? "–" : acc + "%";
   $("mWrong").textContent = (e.problems || []).filter((p) => p.ok === false).length + "개";
-  $("mLecture").textContent = e.lecture || "–";
+  $("mLecture").textContent = progressLabel(user) || e.lecture || "–";
   $("mConfusing").textContent = e.confusing || "기록 없음";
 
   $("streakNum").textContent = streakOf(mine);
@@ -352,7 +356,7 @@ function renderCombined() {
 
   $("mLecture").innerHTML = USERS.map((u) => {
     const e = ALL.find((x) => userOf(x) === u && x.date === day);
-    return `${dot(u)}${escapeHtml(u)} ${escapeHtml(e?.lecture || "–")}`;
+    return `${dot(u)}${escapeHtml(u)} ${escapeHtml(progressLabel(u) || e?.lecture || "–")}`;
   }).join("&nbsp;&nbsp;·&nbsp;&nbsp;");
 
   $("mConfusing").innerHTML = USERS.map((u) => {
@@ -377,12 +381,14 @@ function streakOf(entries) {
 function renderSummaryNotes(user) {
   const box = $("summaryList");
   if (!box || !window.SapSummaryNotes) return;
+  populateSummarySectionSelect($("summarySection"));
   const allNotes = summaryNotesForDisplay();
   const notes = window.SapSummaryNotes.filterSummaryNotes(allNotes, user);
   const canEdit = !!activeEntryUser();
 
   $("summaryCount").textContent = notes.length ? `${notes.length}개` : "";
   $("summarySaveBtn").disabled = !canEdit;
+  $("summarySection").disabled = !canEdit;
   $("summaryTitle").disabled = !canEdit;
   $("summaryContent").disabled = !canEdit;
   $("summaryFile").disabled = !canEdit;
@@ -394,7 +400,21 @@ function renderSummaryNotes(user) {
     return;
   }
 
-  notes.forEach((note, index) => {
+  summarySections().forEach((section) => {
+    const sectionNotes = window.SapSummaryNotes.filterSummaryNotesBySection(notes, section.id);
+    if (!sectionNotes.length) return;
+    const group = document.createElement("details");
+    group.className = "summary-section";
+    group.open = true;
+    group.innerHTML = `
+      <summary>
+        <span>${section.number ? `섹션 ${section.number}` : "Dump"} · ${escapeHtml(section.title)}</span>
+        <span class="muted">${sectionNotes.length}개</span>
+      </summary>
+      <div class="summary-section-body"></div>
+    `;
+    const body = group.querySelector(".summary-section-body");
+    sectionNotes.forEach((note, index) => {
     const detail = document.createElement("details");
     detail.className = "summary-note";
     if (index === 0) detail.open = true;
@@ -404,13 +424,17 @@ function renderSummaryNotes(user) {
         <span class="summary-note-title">${escapeHtml(note.title)}</span>
         <span class="summary-note-side">
           <span class="summary-note-meta">${userTag}${escapeHtml(note.date)}</span>
+          <button class="summary-edit-btn" type="button" data-summary-edit="${escapeHtml(note.id)}" aria-label="${escapeHtml(note.title)} 수정">수정</button>
           <button class="summary-delete-btn" type="button" data-summary-delete="${escapeHtml(note.id)}" aria-label="${escapeHtml(note.title)} 삭제">삭제</button>
         </span>
       </summary>
       <div class="summary-note-content">${window.SapSummaryNotes.markdownToHtml(note.content)}</div>
     `;
+    detail.querySelector("[data-summary-edit]")?.addEventListener("click", editSummaryNote);
     detail.querySelector("[data-summary-delete]")?.addEventListener("click", deleteSummaryNote);
-    box.appendChild(detail);
+      body.appendChild(detail);
+    });
+    box.appendChild(group);
   });
 }
 
@@ -451,29 +475,64 @@ async function saveSummaryNote() {
     setSummaryStatus("저장할 요약 내용이 없어요.", "err");
     return;
   }
-  const note = window.SapSummaryNotes.createSummaryNote({
-    user,
-    title: $("summaryTitle").value,
-    content,
-  });
-  window.SapSummaryNotes.addSummaryNote(localStorage, note);
+  const title = $("summaryTitle").value;
+  const sectionId = $("summarySection").value;
+  const nextLocalNotes = summaryEditingId
+    ? window.SapSummaryNotes.updateSummaryNote(summaryNotesForDisplay(), summaryEditingId, { sectionId, title, content })
+    : window.SapSummaryNotes.upsertSummaryNote(
+      summaryNotesForDisplay(),
+      window.SapSummaryNotes.createSummaryNote({ user, sectionId, title, content })
+    );
+  const note = summaryEditingId
+    ? nextLocalNotes.find((item) => item.id === summaryEditingId)
+    : nextLocalNotes[0];
+  writeLocalSummaryNotes(nextLocalNotes);
   let synced = false;
   if (ghToken()) {
-    setSummaryStatus("요약 저장 중...", "pending");
+    setSummaryStatus(summaryEditingId ? "요약 수정 중..." : "요약 저장 중...", "pending");
     try {
-      const nextNotes = window.SapSummaryNotes.upsertSummaryNote(summaryNotesForDisplay(), note);
-      await commitSummaryNotes(nextNotes, `notes: ${user} ${note.title}`);
+      await commitSummaryNotes(nextLocalNotes, `notes: ${summaryEditingId ? "edit" : user} ${note.title}`);
       synced = true;
     } catch (err) {
-      setSummaryStatus("원격 저장 실패: " + err.message + " · 브라우저에는 저장됐어요", "err");
+      setSummaryStatus("원격 반영 실패: " + err.message + " · 브라우저에는 저장됐어요", "err");
     }
   }
+  const wasEditing = !!summaryEditingId;
+  resetSummaryForm();
+  if (!ghToken()) setSummaryStatus(`${user} 요약 ${wasEditing ? "수정" : "저장"}됨 · 토큰 연결 시 원격에도 반영돼요`, "ok");
+  else if (synced) setSummaryStatus(`${user} 요약 ${wasEditing ? "수정" : "저장"}됨 · 원격 반영 완료`, "ok");
+  renderSummaryNotes(view === ALL_VIEW ? null : user);
+}
+
+function resetSummaryForm() {
+  summaryEditingId = null;
   $("summaryTitle").value = "";
   $("summaryContent").value = "";
   $("summaryFile").value = "";
-  if (!ghToken()) setSummaryStatus(`${user} 요약 저장됨 · 토큰 연결 시 원격에도 반영돼요`, "ok");
-  else if (synced) setSummaryStatus(`${user} 요약 저장됨 · 원격 반영 완료`, "ok");
-  renderSummaryNotes(view === ALL_VIEW ? null : user);
+  if ($("summarySection") && window.SapSummaryNotes) $("summarySection").value = window.SapSummaryNotes.MISC_SECTION_ID;
+  $("summarySaveBtn").textContent = "요약 저장";
+  $("summaryCancelEditBtn")?.classList.add("hidden");
+}
+
+function editSummaryNote(ev) {
+  ev.preventDefault();
+  ev.stopPropagation();
+  const id = ev.currentTarget.dataset.summaryEdit;
+  const note = summaryNotesForDisplay().find((item) => item.id === id);
+  if (!note) return;
+  if (note.user !== activeEntryUser()) {
+    setSummaryStatus("해당 사용자 탭에서만 수정할 수 있어요.", "err");
+    return;
+  }
+  summaryEditingId = id;
+  populateSummarySectionSelect($("summarySection"));
+  $("summarySection").value = note.sectionId || window.SapSummaryNotes.MISC_SECTION_ID;
+  $("summaryTitle").value = note.title;
+  $("summaryContent").value = note.content;
+  $("summarySaveBtn").textContent = "수정 저장";
+  $("summaryCancelEditBtn")?.classList.remove("hidden");
+  setSummaryStatus("요약을 수정하는 중이에요.", "pending");
+  $("summaryContent").focus();
 }
 
 async function deleteSummaryNote(ev) {
@@ -485,6 +544,7 @@ async function deleteSummaryNote(ev) {
   const nextNotes = summaryNotesForDisplay().filter((note) => note.id !== id);
   if (nextNotes.length === summaryNotesForDisplay().length) return;
   REMOTE_SUMMARIES = REMOTE_SUMMARIES.filter((note) => note.id !== id);
+  window.SapSummaryNotes.markSummaryNoteDeleted(localStorage, id);
   writeLocalSummaryNotes(nextNotes);
   if (ghToken()) {
     setSummaryStatus("요약정리 삭제 중...", "pending");
@@ -498,6 +558,197 @@ async function deleteSummaryNote(ev) {
     setSummaryStatus("요약정리를 삭제했어요 · 토큰 연결 시 원격에도 반영돼요.", "ok");
   }
   renderSummaryNotes(activeEntryUser());
+}
+
+let timerTick = null;
+
+function currentProgressFor(user) {
+  return window.SapStudyPlan?.progressForUser(window.SapStudyPlan.loadProgress(localStorage), user) || null;
+}
+
+function progressLabel(user) {
+  const progress = currentProgressFor(user);
+  if (!progress || !window.SapStudyPlan) return "–";
+  const section = window.SapStudyPlan.sectionById(progress.sectionId);
+  const lecture = section.lectures ? ` ${progress.lecture}/${section.lectures}강` : "";
+  return `섹션 ${section.number || ""} ${section.title}${lecture}${progress.done ? " · 완료" : ""}`.trim();
+}
+
+function renderTimer() {
+  if (!window.SapStudyTimer) return;
+  const user = activeEntryUser();
+  const timer = window.SapStudyTimer.loadTimer(localStorage);
+  const display = $("timerDisplay");
+  const startBtn = $("timerStartBtn");
+  const stopBtn = $("timerStopBtn");
+  const clearBtn = $("timerClearBtn");
+  if (!display || !startBtn || !stopBtn || !clearBtn) return;
+
+  const isMine = !!timer && timer.user === user;
+  const elapsed = timer ? window.SapStudyTimer.elapsedMinutes(timer.startedAt) : 0;
+  const seconds = timer ? Math.max(0, Math.round((Date.now() - new Date(timer.startedAt).getTime()) / 1000)) : 0;
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  display.textContent = timer ? `${pad(h)}:${pad(m)}:${pad(s)}` : "00:00:00";
+
+  $("timerOwner").textContent = timer ? `${timer.user} 타이머 실행 중` : (user ? `${user} 순공시간` : "개인 탭에서 사용");
+  startBtn.disabled = !user || !!timer;
+  stopBtn.disabled = !isMine;
+  clearBtn.disabled = !isMine;
+
+  if (!user) $("timerStatus").textContent = "가연 또는 소울 탭에서 타이머를 사용할 수 있어요.";
+  else if (!timer) $("timerStatus").textContent = "시작 시각을 저장하고, 종료할 때 실제 경과 시간으로 오늘 공부시간에 더해요.";
+  else if (isMine) $("timerStatus").textContent = `${timer.user} · ${fmtMinutes(elapsed)} 경과 중. 종료하면 오늘 공부시간에 누적됩니다.`;
+  else $("timerStatus").textContent = `${timer.user} 타이머가 실행 중이라 ${user} 타이머는 잠시 사용할 수 없어요.`;
+}
+
+function startStudyTimer() {
+  const user = activeEntryUser();
+  if (!user || !window.SapStudyTimer) return;
+  window.SapStudyTimer.startTimer(localStorage, user);
+  renderTimer();
+}
+
+async function stopStudyTimer() {
+  if (!window.SapStudyTimer) return;
+  const stopped = window.SapStudyTimer.stopTimer(localStorage);
+  if (!stopped || !stopped.user) return;
+  if (stopped.elapsedMin <= 0) {
+    renderTimer();
+    return;
+  }
+  const entry = todayEntryFor(stopped.user);
+  entry.studyMin = (entry.studyMin || 0) + stopped.elapsedMin;
+  await saveQuizEntry(entry);
+  setCommitStatus(`${stopped.user} 순공시간 ${fmtMinutes(stopped.elapsedMin)} 저장됨`, "ok");
+  renderTimer();
+}
+
+function clearStudyTimer() {
+  if (!window.SapStudyTimer) return;
+  if (!confirm("실행 중인 타이머를 저장하지 않고 초기화할까요?")) return;
+  window.SapStudyTimer.clearTimer(localStorage);
+  renderTimer();
+}
+
+function ensureTimerTick() {
+  if (timerTick) return;
+  timerTick = setInterval(renderTimer, 1000);
+}
+
+function populateSectionSelect(select, includeAll = false) {
+  if (!select || !window.SapStudyPlan) return;
+  const current = select.value;
+  select.innerHTML = [
+    ...(includeAll ? ['<option value="">전체 섹션</option>'] : []),
+    ...window.SapStudyPlan.SECTIONS.map((section) => (
+      `<option value="${escapeHtml(section.id)}">${section.number ? `섹션 ${section.number}: ` : ""}${escapeHtml(section.title)}</option>`
+    )),
+  ].join("");
+  if ([...select.options].some((option) => option.value === current)) select.value = current;
+}
+
+function summarySections() {
+  return [
+    ...window.SapStudyPlan.SECTIONS,
+    { id: window.SapSummaryNotes.MISC_SECTION_ID, number: null, title: "기타" },
+  ];
+}
+
+function populateSummarySectionSelect(select) {
+  if (!select || !window.SapStudyPlan || !window.SapSummaryNotes) return;
+  const current = select.value || window.SapSummaryNotes.MISC_SECTION_ID;
+  select.innerHTML = summarySections().map((section) => (
+    `<option value="${escapeHtml(section.id)}">${section.number ? `섹션 ${section.number}: ` : ""}${escapeHtml(section.title)}</option>`
+  )).join("");
+  select.value = [...select.options].some((option) => option.value === current)
+    ? current
+    : window.SapSummaryNotes.MISC_SECTION_ID;
+}
+
+function renderStudyPlan() {
+  if (!window.SapStudyPlan) return;
+  const user = activeEntryUser();
+  const progress = window.SapStudyPlan.loadProgress(localStorage);
+  const rows = window.SapStudyPlan.compareProgress(progress, USERS);
+  const controls = $("planControls");
+  const sectionSelect = $("progressSection");
+  const lectureInput = $("progressLecture");
+  const doneInput = $("progressDone");
+  const saveBtn = $("progressSaveBtn");
+  const summary = $("planSummary");
+  if (!controls || !sectionSelect || !lectureInput || !doneInput || !saveBtn) return;
+
+  populateSectionSelect(sectionSelect);
+  const mine = user ? window.SapStudyPlan.progressForUser(progress, user) : null;
+  const section = window.SapStudyPlan.sectionById(mine?.sectionId || "section-3");
+  sectionSelect.value = section.id;
+  lectureInput.max = section.lectures || "";
+  lectureInput.value = mine?.lecture ?? 0;
+  doneInput.checked = !!mine?.done;
+  controls.classList.toggle("hidden", !user);
+  saveBtn.disabled = !user;
+  summary.textContent = user ? `${user}: ${progressLabel(user)}` : "합계: 둘의 현재 위치 비교";
+
+  renderProgressCompare(rows);
+  renderSectionList(rows);
+}
+
+function renderProgressCompare(rows) {
+  const box = $("progressCompare");
+  if (!box) return;
+  box.innerHTML = rows.map((row) => `
+    <div class="progress-person ${row.user === view ? "active" : ""}">
+      <div class="progress-person-top">
+        <strong>${dot(row.user)}${escapeHtml(row.user)}</strong>
+        <span>${row.percent}%</span>
+      </div>
+      <div class="progress-track"><span style="width:${Math.max(row.percent, 3)}%;background:${userColor(row.user)}"></span></div>
+      <p>${row.progress ? `${row.section.number ? `섹션 ${row.section.number}` : "Dump"} · ${escapeHtml(row.section.title)} ${row.section.lectures ? `${row.lecture}/${row.section.lectures}강` : ""}` : "아직 진도 없음"}</p>
+    </div>
+  `).join("");
+}
+
+function renderSectionList(rows) {
+  const box = $("sectionList");
+  if (!box || !window.SapStudyPlan) return;
+  const byUser = new Map(rows.map((row) => [row.user, row]));
+  box.innerHTML = window.SapStudyPlan.SECTIONS.map((section) => {
+    const marks = USERS.map((user) => {
+      const row = byUser.get(user);
+      const here = row?.section.id === section.id;
+      return `<span class="section-user ${here ? "here" : ""}">${dot(user)}${escapeHtml(user)}${here ? ` ${row.lecture || 0}/${section.lectures || "-"}${row.done ? " 완료" : ""}` : ""}</span>`;
+    }).join("");
+    return `
+      <div class="section-row">
+        <div>
+          <strong>${section.number ? `섹션 ${section.number}` : "Dump"}</strong>
+          <span>${escapeHtml(section.title)}</span>
+          <small>${section.lectures ? `${section.lectures}강 · ` : ""}${escapeHtml(section.duration)} · ${escapeHtml(section.estimate)}</small>
+        </div>
+        <div class="section-users">${marks}</div>
+      </div>
+    `;
+  }).join("");
+}
+
+function saveStudyProgress() {
+  const user = activeEntryUser();
+  if (!user || !window.SapStudyPlan) return;
+  const section = window.SapStudyPlan.sectionById($("progressSection").value);
+  const lecture = Math.max(0, Math.min(Number($("progressLecture").value || 0), section.lectures || Number($("progressLecture").value || 0)));
+  window.SapStudyPlan.updateProgress(localStorage, {
+    user,
+    sectionId: section.id,
+    lecture,
+    done: $("progressDone").checked,
+    updatedAt: new Date().toISOString(),
+  });
+  $("progressStatus").textContent = `${user} 진도를 저장했어요.`;
+  $("progressStatus").className = "hint ok";
+  renderStudyPlan();
+  renderUser(user);
 }
 
 function renderTrend(entries) {
@@ -944,6 +1195,25 @@ function initSummaryNotes() {
     loadSummaryFile(ev.target.files[0]).catch((err) => setSummaryStatus("파일 읽기 실패: " + err.message, "err"));
   });
   $("summarySaveBtn")?.addEventListener("click", saveSummaryNote);
+  $("summaryCancelEditBtn")?.addEventListener("click", () => {
+    resetSummaryForm();
+    setSummaryStatus("수정을 취소했어요.");
+  });
+}
+
+function initStudyTools() {
+  $("timerStartBtn")?.addEventListener("click", startStudyTimer);
+  $("timerStopBtn")?.addEventListener("click", () => {
+    stopStudyTimer().catch((err) => setCommitStatus("타이머 저장 실패: " + err.message, "err"));
+  });
+  $("timerClearBtn")?.addEventListener("click", clearStudyTimer);
+  $("progressSaveBtn")?.addEventListener("click", saveStudyProgress);
+  $("progressSection")?.addEventListener("change", () => {
+    const section = window.SapStudyPlan.sectionById($("progressSection").value);
+    $("progressLecture").max = section.lectures || "";
+    $("progressLecture").value = Math.min(Number($("progressLecture").value || 0), section.lectures || Number($("progressLecture").value || 0));
+  });
+  ensureTimerTick();
 }
 
 /* ── 데이터 로드 ──────────────────────────────────────── */
@@ -986,6 +1256,7 @@ function updateLocalBadge() {
 function init() {
   initQuiz();
   initSummaryNotes();
+  initStudyTools();
   window.addEventListener("resize", moveIndicator);
 
   $("ghSaveBtn")?.addEventListener("click", () => {

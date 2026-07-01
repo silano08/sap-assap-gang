@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AWS SAP 스터디 트래커</title>
-  <link rel="stylesheet" href="style.css?v=20260628-summary-sync" />
+  <link rel="stylesheet" href="style.css?v=20260701-summary-edit" />
 </head>
 <body>
   <div class="wrap">
@@ -65,6 +65,51 @@
       </div>
     </section>
 
+    <section class="card timer-card" id="timerCard">
+      <div class="card-head">
+        <h2 class="card-title">⏱ 순공 타이머</h2>
+        <span class="muted" id="timerOwner">개인 탭에서 사용</span>
+      </div>
+      <div class="study-timer">
+        <div class="timer-display" id="timerDisplay">00:00:00</div>
+        <div class="timer-actions">
+          <button class="btn primary" id="timerStartBtn" type="button">시작</button>
+          <button class="btn" id="timerStopBtn" type="button">종료하고 시간 저장</button>
+          <button class="btn ghost" id="timerClearBtn" type="button">초기화</button>
+        </div>
+        <p class="hint" id="timerStatus">시작 시각을 저장하고, 종료할 때 실제 경과 시간으로 오늘 공부시간에 더해요.</p>
+      </div>
+    </section>
+
+    <section class="card plan-card" id="planCard">
+      <details class="plan-details" open>
+        <summary>
+          <span>🗓 강의 일정표</span>
+          <span class="muted" id="planSummary">현재 진도 체크</span>
+        </summary>
+        <div class="plan-body">
+          <div class="plan-controls" id="planControls">
+            <label>
+              <span>현재 섹션</span>
+              <select id="progressSection"></select>
+            </label>
+            <label>
+              <span>현재 강의</span>
+              <input type="number" id="progressLecture" min="0" step="1" />
+            </label>
+            <label class="checkline">
+              <input type="checkbox" id="progressDone" />
+              <span>이 섹션 완료</span>
+            </label>
+            <button class="btn primary" id="progressSaveBtn" type="button">진도 저장</button>
+          </div>
+          <p class="hint" id="progressStatus"></p>
+          <div class="progress-compare" id="progressCompare"></div>
+          <div class="section-list" id="sectionList"></div>
+        </div>
+      </details>
+    </section>
+
     <div class="grid2 solo" id="mainGrid">
 
       <!-- ── 요약정리 ─────────────────────────── -->
@@ -72,6 +117,7 @@
         <h2 class="card-title">📒 요약정리 <span class="muted" id="summaryCount"></span></h2>
         <div class="summary-form" id="summaryForm">
           <div class="summary-row">
+            <select id="summarySection" aria-label="요약 섹션"></select>
             <input type="text" id="summaryTitle" placeholder="제목" autocomplete="off" />
             <label class="file-btn summary-upload">
               MD 업로드
@@ -81,6 +127,7 @@
           <textarea id="summaryContent" rows="5" placeholder="요약 정리 붙여넣기"></textarea>
           <div class="summary-actions">
             <span class="hint" id="summaryStatus"></span>
+            <button class="btn small ghost hidden" id="summaryCancelEditBtn" type="button">수정 취소</button>
             <button class="btn small primary" id="summarySaveBtn" type="button">요약 저장</button>
           </div>
         </div>
@@ -129,7 +176,7 @@
     </main>
 
     <footer class="foot">
-      문제풀이 세션과 요약정리는 이 브라우저에 먼저 저장돼요
+      타이머, 진도, 문제풀이 세션과 요약정리는 이 브라우저에 먼저 저장돼요
     </footer>
   </div>
 
@@ -198,7 +245,9 @@
   <script src="quiz-parser.js?v=20260628"></script>
   <script src="quiz-cache.js?v=20260628-notes-cache"></script>
   <script src="quiz-session.js?v=20260628-save-preview"></script>
-  <script src="summary-notes.js?v=20260628-summary-sync"></script>
-  <script src="app.js?v=20260628-summary-sync"></script>
+  <script src="study-timer.js?v=20260701-timer"></script>
+  <script src="study-plan.js?v=20260701-plan"></script>
+  <script src="summary-notes.js?v=20260701-summary-edit"></script>
+  <script src="app.js?v=20260701-summary-edit"></script>
 </body>
 </html>

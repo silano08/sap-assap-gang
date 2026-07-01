@@ -6,28 +6,54 @@
   }
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   const KEY = "sap-summary-notes-v1";
+  const DELETED_KEY = "sap-summary-deleted-v1";
+  const MISC_SECTION_ID = "misc";
 
   function loadSummaryNotes(storage) {
     try {
       const notes = JSON.parse(storage.getItem(KEY) || "[]");
-      return Array.isArray(notes)
-        ? notes.filter((note) => note && note.user && note.content).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
-        : [];
+      return normalizeSummaryNotes(notes);
     } catch {
       return [];
     }
+  }
+
+  function loadDeletedSummaryIds(storage) {
+    try {
+      const ids = JSON.parse(storage.getItem(DELETED_KEY) || "[]");
+      return Array.isArray(ids) ? ids.filter(Boolean) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function saveDeletedSummaryIds(storage, ids) {
+    storage.setItem(DELETED_KEY, JSON.stringify([...new Set(Array.isArray(ids) ? ids.filter(Boolean) : [])]));
+  }
+
+  function markSummaryNoteDeleted(storage, id) {
+    if (!id) return false;
+    saveDeletedSummaryIds(storage, [...loadDeletedSummaryIds(storage), id]);
+    removeSummaryNote(storage, id);
+    return true;
+  }
+
+  function filterDeletedSummaryNotes(notes, storage) {
+    const deleted = new Set(loadDeletedSummaryIds(storage));
+    return normalizeSummaryNotes(notes).filter((note) => !deleted.has(note.id));
   }
 
   function saveSummaryNotes(storage, notes) {
     storage.setItem(KEY, JSON.stringify(Array.isArray(notes) ? notes : []));
   }
 
-  function createSummaryNote({ user, title, content, now = new Date().toISOString() }) {
+  function createSummaryNote({ user, title, content, sectionId = MISC_SECTION_ID, now = new Date().toISOString() }) {
     const date = now.slice(0, 10);
     const cleanTitle = String(title || "").trim() || `${date} 요약`;
     return {
       id: `${date}-${Math.random().toString(36).slice(2, 10)}`,
       user,
+      sectionId,
       date,
       title: cleanTitle,
       content: String(content || "").trim(),
@@ -58,9 +84,15 @@
     return notes.filter((note) => note.user === user);
   }
 
+  function filterSummaryNotesBySection(notes, sectionId) {
+    if (!sectionId) return notes;
+    return notes.filter((note) => (note.sectionId || MISC_SECTION_ID) === sectionId);
+  }
+
   function normalizeSummaryNotes(notes) {
     return (Array.isArray(notes) ? notes : [])
       .filter((note) => note && note.id && note.user && note.content)
+      .map((note) => ({ ...note, sectionId: note.sectionId || MISC_SECTION_ID }))
       .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
   }
 
@@ -74,6 +106,19 @@
   function upsertSummaryNote(notes, note) {
     if (!note || !note.id) return normalizeSummaryNotes(notes);
     return normalizeSummaryNotes([note, ...normalizeSummaryNotes(notes).filter((item) => item.id !== note.id)]);
+  }
+
+  function updateSummaryNote(notes, id, changes = {}) {
+    const existing = normalizeSummaryNotes(notes).find((note) => note.id === id);
+    if (!existing) return normalizeSummaryNotes(notes);
+    const updated = {
+      ...existing,
+      sectionId: changes.sectionId || existing.sectionId || MISC_SECTION_ID,
+      title: String(changes.title || "").trim() || existing.title,
+      content: String(changes.content || "").trim() || existing.content,
+      updatedAt: changes.now || new Date().toISOString(),
+    };
+    return upsertSummaryNote(notes, updated);
   }
 
   function escapeHtml(value) {
@@ -168,14 +213,20 @@
 
   return {
     KEY,
+    MISC_SECTION_ID,
     createSummaryNote,
     addSummaryNote,
     loadSummaryNotes,
     clearSummaryNotes,
     removeSummaryNote,
+    markSummaryNoteDeleted,
+    loadDeletedSummaryIds,
+    filterDeletedSummaryNotes,
     filterSummaryNotes,
+    filterSummaryNotesBySection,
     mergeSummaryNotes,
     upsertSummaryNote,
+    updateSummaryNote,
     markdownToHtml,
   };
 });
