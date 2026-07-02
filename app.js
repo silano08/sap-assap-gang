@@ -8,7 +8,7 @@
 =================================================================== */
 
 const LOG_FILE = "study-log.jsonl";
-const SUMMARY_FILE = "summary-notes.json";
+const SUMMARY_FILE = "summary-notes-20260702.json";
 const ALL_VIEW = "__ALL__";
 const DEFAULT_USERS = ["가연", "소울"]; // 로그가 비어도 토글에 항상 표시
 const PALETTE = ["#ff9900", "#2f6fed", "#1a8754", "#c026d3"]; // 유저별 색
