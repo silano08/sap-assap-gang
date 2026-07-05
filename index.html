@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AWS SAP 스터디 트래커</title>
-  <link rel="stylesheet" href="style.css?v=20260701-summary-edit" />
+  <link rel="stylesheet" href="style.css?v=20260705-codeblock-flex" />
 </head>
 <body>
   <div class="wrap">
@@ -131,7 +131,13 @@
             <button class="btn small primary" id="summarySaveBtn" type="button">요약 저장</button>
           </div>
         </div>
-        <div id="summaryList" class="summary-list"></div>
+        <div class="summary-browser" aria-label="저장된 요약정리">
+          <div class="summary-browser-tools">
+            <input type="search" id="summarySearch" placeholder="요약 안에서 검색" autocomplete="off" />
+            <select id="summaryFilterSection" aria-label="요약 보기 섹션"></select>
+          </div>
+          <div id="summaryList" class="summary-list"></div>
+        </div>
       </section>
 
     </div>
@@ -178,6 +184,25 @@
     <footer class="foot">
       타이머, 진도, 문제풀이 세션과 요약정리는 이 브라우저에 먼저 저장돼요
     </footer>
+  </div>
+
+  <div class="modal hidden" id="summaryModal" role="dialog" aria-modal="true" aria-labelledby="summaryModalTitle">
+    <div class="modal-backdrop" id="summaryModalBackdrop"></div>
+    <section class="modal-panel summary-modal-panel">
+      <header class="modal-head">
+        <div>
+          <p class="summary-modal-section" id="summaryModalSection"></p>
+          <h2 id="summaryModalTitle">요약정리</h2>
+          <p class="muted" id="summaryModalMeta"></p>
+        </div>
+        <button class="modal-close" id="summaryCloseBtn" type="button" aria-label="요약정리 닫기">×</button>
+      </header>
+      <article class="summary-note-content summary-modal-content" id="summaryModalContent"></article>
+      <footer class="modal-actions summary-modal-actions">
+        <button class="btn ghost" id="summaryModalEditBtn" type="button">수정</button>
+        <button class="btn ghost danger" id="summaryModalDeleteBtn" type="button">삭제</button>
+      </footer>
+    </section>
   </div>
 
   <div class="modal hidden" id="quizModal" role="dialog" aria-modal="true" aria-labelledby="quizModalTitle">
@@ -247,7 +272,7 @@
   <script src="quiz-session.js?v=20260628-save-preview"></script>
   <script src="study-timer.js?v=20260701-timer-fix"></script>
   <script src="study-plan.js?v=20260701-plan"></script>
-  <script src="summary-notes.js?v=20260701-summary-edit"></script>
-  <script src="app.js?v=20260702-md-import"></script>
+  <script src="summary-notes.js?v=20260705-markdown-fix"></script>
+  <script src="app.js?v=20260705-summary-browser"></script>
 </body>
 </html>

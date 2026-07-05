@@ -14,6 +14,7 @@ const {
   markSummaryNoteDeleted,
   filterDeletedSummaryNotes,
   filterSummaryNotesBySection,
+  buildSummaryLibrary,
   MISC_SECTION_ID,
   updateSummaryNote,
 } = require("./summary-notes");
@@ -92,6 +93,47 @@ test("filterSummaryNotesBySection keeps notes under their lecture section", () =
   ];
 
   assert.deepEqual(filterSummaryNotesBySection(notes, "section-3").map((note) => note.id), ["s3"]);
+});
+
+test("buildSummaryLibrary searches notes and groups them by lecture section order", () => {
+  const notes = [
+    { id: "misc", user: "가연", date: "2026-06-28", sectionId: "misc", title: "기타 메모", content: "prefix list", createdAt: "2026-06-28T03:00:00.000Z" },
+    { id: "security", user: "가연", date: "2026-06-28", sectionId: "section-4", title: "KMS", content: "암호화", createdAt: "2026-06-28T02:00:00.000Z" },
+    { id: "iam", user: "가연", date: "2026-06-28", sectionId: "section-3", title: "IAM", content: "SCP와 권한 평가", createdAt: "2026-06-28T01:00:00.000Z" },
+  ];
+
+  const library = buildSummaryLibrary(notes, {
+    query: "권한",
+    sections: [
+      { id: "section-3", title: "자격 증명" },
+      { id: "section-4", title: "보안" },
+      { id: "misc", title: "기타" },
+    ],
+  });
+
+  assert.deepEqual(library.groups.map((group) => group.id), ["section-3"]);
+  assert.deepEqual(library.groups[0].notes.map((note) => note.id), ["iam"]);
+  assert.equal(library.total, 1);
+});
+
+test("buildSummaryLibrary filters by section and keeps newest notes first inside the section", () => {
+  const notes = [
+    { id: "old", user: "가연", date: "2026-06-28", sectionId: "section-5", title: "EC2", content: "old", createdAt: "2026-06-28T01:00:00.000Z" },
+    { id: "new", user: "가연", date: "2026-06-29", sectionId: "section-5", title: "Lambda", content: "new", createdAt: "2026-06-29T01:00:00.000Z" },
+    { id: "other", user: "가연", date: "2026-06-29", sectionId: "section-6", title: "S3", content: "other", createdAt: "2026-06-29T02:00:00.000Z" },
+  ];
+
+  const library = buildSummaryLibrary(notes, {
+    sectionId: "section-5",
+    sections: [
+      { id: "section-5", title: "컴퓨팅" },
+      { id: "section-6", title: "스토리지" },
+    ],
+  });
+
+  assert.deepEqual(library.groups.map((group) => group.id), ["section-5"]);
+  assert.deepEqual(library.groups[0].notes.map((note) => note.id), ["new", "old"]);
+  assert.equal(library.total, 2);
 });
 
 test("legacy summary notes without sectionId are treated as misc", () => {
@@ -185,4 +227,32 @@ test("markdownToHtml renders fenced code blocks", () => {
   const html = markdownToHtml("```json\n{\"Effect\":\"Allow\"}\n```");
 
   assert.equal(html, '<pre><code>{&quot;Effect&quot;:&quot;Allow&quot;}</code></pre>');
+});
+
+test("markdownToHtml renders markdown tables", () => {
+  const html = markdownToHtml([
+    "| 서비스 | 포인트 |",
+    "| --- | --- |",
+    "| `Lambda` | **15분** 제한 |",
+    "| ECS | 컨테이너 실행 |",
+  ].join("\n"));
+
+  assert.match(html, /<table>/);
+  assert.match(html, /<th>서비스<\/th>/);
+  assert.match(html, /<td><code>Lambda<\/code><\/td>/);
+  assert.match(html, /<td><strong>15분<\/strong> 제한<\/td>/);
+  assert.doesNotMatch(html, /\| --- \| --- \|/);
+});
+
+test("markdownToHtml renders horizontal rules and ordered lists", () => {
+  const html = markdownToHtml([
+    "첫 문단",
+    "",
+    "----",
+    "",
+    "1. 첫째",
+    "2. 둘째",
+  ].join("\n"));
+
+  assert.match(html, /<p>첫 문단<\/p><hr><ol><li>첫째<\/li><li>둘째<\/li><\/ol>/);
 });

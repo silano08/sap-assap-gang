@@ -20,6 +20,9 @@ let USERS = [];      // 정렬된 유저 목록
 let view = null;     // 현재 보기: 유저명 또는 ALL_VIEW
 let segOrder = [];   // 토글 버튼 순서(값) — 전환 방향 계산용
 let summaryEditingId = null;
+let summarySearchQuery = "";
+let summaryFilterSection = "";
+let summaryModalNoteId = null;
 
 const LS_KEY = "sap-local-entries-v1"; // 이 브라우저 임시 저장
 
@@ -382,16 +385,28 @@ function renderSummaryNotes(user) {
   const box = $("summaryList");
   if (!box || !window.SapSummaryNotes) return;
   populateSummarySectionSelect($("summarySection"));
+  populateSummarySectionSelect($("summaryFilterSection"), true);
+  if ($("summarySearch")) $("summarySearch").value = summarySearchQuery;
+  if ($("summaryFilterSection")) $("summaryFilterSection").value = summaryFilterSection;
   const allNotes = summaryNotesForDisplay();
   const notes = window.SapSummaryNotes.filterSummaryNotes(allNotes, user);
   const canEdit = !!activeEntryUser();
+  const library = window.SapSummaryNotes.buildSummaryLibrary(notes, {
+    query: summarySearchQuery,
+    sectionId: summaryFilterSection,
+    sections: summarySections(),
+  });
 
-  $("summaryCount").textContent = notes.length ? `${notes.length}개` : "";
+  $("summaryCount").textContent = notes.length
+    ? (library.total === notes.length ? `${notes.length}개` : `${library.total}/${notes.length}개`)
+    : "";
   $("summarySaveBtn").disabled = !canEdit;
   $("summarySection").disabled = !canEdit;
   $("summaryTitle").disabled = !canEdit;
   $("summaryContent").disabled = !canEdit;
   $("summaryFile").disabled = !canEdit;
+  $("summarySearch").disabled = !notes.length;
+  $("summaryFilterSection").disabled = !notes.length;
   if (!canEdit) setSummaryStatus("개인 탭에서 요약을 저장할 수 있어요.");
 
   box.innerHTML = "";
@@ -399,43 +414,78 @@ function renderSummaryNotes(user) {
     box.innerHTML = '<p class="empty">저장된 요약정리가 없어요.</p>';
     return;
   }
+  if (!library.total) {
+    box.innerHTML = '<p class="empty">검색 결과가 없어요.</p>';
+    return;
+  }
 
-  summarySections().forEach((section) => {
-    const sectionNotes = window.SapSummaryNotes.filterSummaryNotesBySection(notes, section.id);
-    if (!sectionNotes.length) return;
-    const group = document.createElement("details");
+  library.groups.forEach((section) => {
+    const group = document.createElement("section");
     group.className = "summary-section";
-    group.open = true;
     group.innerHTML = `
-      <summary>
-        <span>${section.number ? `섹션 ${section.number}` : "Dump"} · ${escapeHtml(section.title)}</span>
-        <span class="muted">${sectionNotes.length}개</span>
-      </summary>
+      <div class="summary-section-head">
+        <span>${section.number ? `섹션 ${section.number}` : "기타"} · ${escapeHtml(section.title)}</span>
+        <span class="muted">${section.notes.length}개</span>
+      </div>
       <div class="summary-section-body"></div>
     `;
     const body = group.querySelector(".summary-section-body");
-    sectionNotes.forEach((note, index) => {
-    const detail = document.createElement("details");
-    detail.className = "summary-note";
-    if (index === 0) detail.open = true;
+    section.notes.forEach((note) => {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "summary-note";
+    item.dataset.summaryOpen = note.id;
     const userTag = user ? "" : `${dot(note.user)}${escapeHtml(note.user)} · `;
-    detail.innerHTML = `
-      <summary>
+    item.innerHTML = `
+      <span class="summary-note-top">
         <span class="summary-note-title">${escapeHtml(note.title)}</span>
-        <span class="summary-note-side">
-          <span class="summary-note-meta">${userTag}${escapeHtml(note.date)}</span>
-          <button class="summary-edit-btn" type="button" data-summary-edit="${escapeHtml(note.id)}" aria-label="${escapeHtml(note.title)} 수정">수정</button>
-          <button class="summary-delete-btn" type="button" data-summary-delete="${escapeHtml(note.id)}" aria-label="${escapeHtml(note.title)} 삭제">삭제</button>
-        </span>
-      </summary>
-      <div class="summary-note-content">${window.SapSummaryNotes.markdownToHtml(note.content)}</div>
+        <span class="summary-note-meta">${userTag}${escapeHtml(note.date)}</span>
+      </span>
+      <span class="summary-note-preview">${escapeHtml(summaryPreview(note.content))}</span>
     `;
-    detail.querySelector("[data-summary-edit]")?.addEventListener("click", editSummaryNote);
-    detail.querySelector("[data-summary-delete]")?.addEventListener("click", deleteSummaryNote);
-      body.appendChild(detail);
+    item.addEventListener("click", () => openSummaryModal(note.id));
+      body.appendChild(item);
     });
     box.appendChild(group);
   });
+}
+
+function summaryPreview(content) {
+  return String(content || "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/[#>*_`|[\]()]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 130) || "내용 미리보기가 없어요.";
+}
+
+function summarySectionLabel(note) {
+  const section = summarySections().find((item) => item.id === (note?.sectionId || window.SapSummaryNotes.MISC_SECTION_ID));
+  if (!section) return "기타";
+  return section.number ? `섹션 ${section.number} · ${section.title}` : section.title;
+}
+
+function openSummaryModal(id) {
+  const note = summaryNotesForDisplay().find((item) => item.id === id);
+  if (!note) return;
+  summaryModalNoteId = id;
+  $("summaryModalTitle").textContent = note.title;
+  $("summaryModalSection").textContent = summarySectionLabel(note);
+  $("summaryModalMeta").innerHTML = `${dot(note.user)}${escapeHtml(note.user)} · ${escapeHtml(note.date)}`;
+  $("summaryModalContent").innerHTML = window.SapSummaryNotes.markdownToHtml(note.content);
+  const canEdit = note.user === activeEntryUser();
+  $("summaryModalEditBtn").disabled = !canEdit;
+  $("summaryModalDeleteBtn").disabled = !canEdit;
+  $("summaryModalEditBtn").dataset.summaryEdit = id;
+  $("summaryModalDeleteBtn").dataset.summaryDelete = id;
+  $("summaryModal").classList.remove("hidden");
+  document.body.classList.add("modal-open");
+}
+
+function closeSummaryModal() {
+  summaryModalNoteId = null;
+  $("summaryModal")?.classList.add("hidden");
+  document.body.classList.remove("modal-open");
 }
 
 function setSummaryStatus(text, kind = "") {
@@ -532,6 +582,7 @@ function editSummaryNote(ev) {
   $("summarySaveBtn").textContent = "수정 저장";
   $("summaryCancelEditBtn")?.classList.remove("hidden");
   setSummaryStatus("요약을 수정하는 중이에요.", "pending");
+  closeSummaryModal();
   $("summaryContent").focus();
 }
 
@@ -557,6 +608,7 @@ async function deleteSummaryNote(ev) {
   } else {
     setSummaryStatus("요약정리를 삭제했어요 · 토큰 연결 시 원격에도 반영돼요.", "ok");
   }
+  if (summaryModalNoteId === id) closeSummaryModal();
   renderSummaryNotes(activeEntryUser());
 }
 
@@ -657,15 +709,19 @@ function summarySections() {
   ];
 }
 
-function populateSummarySectionSelect(select) {
+function populateSummarySectionSelect(select, includeAll = false) {
   if (!select || !window.SapStudyPlan || !window.SapSummaryNotes) return;
-  const current = select.value || window.SapSummaryNotes.MISC_SECTION_ID;
-  select.innerHTML = summarySections().map((section) => (
+  const fallback = includeAll ? "" : window.SapSummaryNotes.MISC_SECTION_ID;
+  const current = select.value || fallback;
+  select.innerHTML = [
+    ...(includeAll ? ['<option value="">전체 섹션</option>'] : []),
+    ...summarySections().map((section) => (
     `<option value="${escapeHtml(section.id)}">${section.number ? `섹션 ${section.number}: ` : ""}${escapeHtml(section.title)}</option>`
-  )).join("");
+    )),
+  ].join("");
   select.value = [...select.options].some((option) => option.value === current)
     ? current
-    : window.SapSummaryNotes.MISC_SECTION_ID;
+    : fallback;
 }
 
 function renderStudyPlan() {
@@ -1186,7 +1242,9 @@ function initQuiz() {
     if (ev.key === "Enter") jumpQuizQuestion();
   });
   document.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape" && !$("quizModal").classList.contains("hidden")) closeQuizModal();
+    if (ev.key !== "Escape") return;
+    if (!$("summaryModal")?.classList.contains("hidden")) closeSummaryModal();
+    else if (!$("quizModal").classList.contains("hidden")) closeQuizModal();
   });
   restoreCachedQuizBank();
 }
@@ -1200,6 +1258,18 @@ function initSummaryNotes() {
     resetSummaryForm();
     setSummaryStatus("수정을 취소했어요.");
   });
+  $("summarySearch")?.addEventListener("input", (ev) => {
+    summarySearchQuery = ev.target.value;
+    renderSummaryNotes(activeEntryUser());
+  });
+  $("summaryFilterSection")?.addEventListener("change", (ev) => {
+    summaryFilterSection = ev.target.value;
+    renderSummaryNotes(activeEntryUser());
+  });
+  $("summaryCloseBtn")?.addEventListener("click", closeSummaryModal);
+  $("summaryModalBackdrop")?.addEventListener("click", closeSummaryModal);
+  $("summaryModalEditBtn")?.addEventListener("click", editSummaryNote);
+  $("summaryModalDeleteBtn")?.addEventListener("click", deleteSummaryNote);
 }
 
 function initStudyTools() {

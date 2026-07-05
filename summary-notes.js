@@ -89,6 +89,66 @@
     return notes.filter((note) => (note.sectionId || MISC_SECTION_ID) === sectionId);
   }
 
+  function buildSummaryLibrary(notes, { query = "", sectionId = "", sections = [] } = {}) {
+    const normalized = normalizeSummaryNotes(notes);
+    const sectionMap = new Map((Array.isArray(sections) ? sections : []).map((section, index) => [
+      section.id,
+      { ...section, order: index },
+    ]));
+    const terms = String(query || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+
+    const matchesSearch = (note) => {
+      if (!terms.length) return true;
+      const section = sectionMap.get(note.sectionId || MISC_SECTION_ID);
+      const haystack = [
+        note.title,
+        note.content,
+        note.date,
+        note.user,
+        section?.title,
+        section?.number ? `섹션 ${section.number}` : "",
+      ].join(" ").toLowerCase();
+      return terms.every((term) => haystack.includes(term));
+    };
+
+    const filtered = normalized.filter((note) => {
+      const noteSection = note.sectionId || MISC_SECTION_ID;
+      return (!sectionId || noteSection === sectionId) && matchesSearch(note);
+    });
+
+    const groups = [];
+    const bySection = new Map();
+    filtered.forEach((note) => {
+      const noteSection = note.sectionId || MISC_SECTION_ID;
+      if (!bySection.has(noteSection)) bySection.set(noteSection, []);
+      bySection.get(noteSection).push(note);
+    });
+
+    [...bySection.entries()]
+      .sort(([a], [b]) => {
+        const sectionA = sectionMap.get(a);
+        const sectionB = sectionMap.get(b);
+        const orderA = sectionA ? sectionA.order : Number.MAX_SAFE_INTEGER;
+        const orderB = sectionB ? sectionB.order : Number.MAX_SAFE_INTEGER;
+        if (orderA !== orderB) return orderA - orderB;
+        return String(a).localeCompare(String(b));
+      })
+      .forEach(([id, sectionNotes]) => {
+        const section = sectionMap.get(id) || { id, number: null, title: id === MISC_SECTION_ID ? "기타" : id };
+        groups.push({
+          id,
+          title: section.title,
+          number: section.number || null,
+          notes: normalizeSummaryNotes(sectionNotes),
+        });
+      });
+
+    return {
+      total: filtered.length,
+      groups,
+    };
+  }
+
   function normalizeSummaryNotes(notes) {
     return (Array.isArray(notes) ? notes : [])
       .filter((note) => note && note.id && note.user && note.content)
@@ -136,14 +196,21 @@
   function markdownToHtml(markdown) {
     const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
     const html = [];
-    let listOpen = false;
+    let listType = "";
     let codeOpen = false;
     let codeLines = [];
 
     function closeList() {
-      if (!listOpen) return;
-      html.push("</ul>");
-      listOpen = false;
+      if (!listType) return;
+      html.push(`</${listType}>`);
+      listType = "";
+    }
+
+    function openList(type) {
+      if (listType === type) return;
+      closeList();
+      html.push(`<${type}>`);
+      listType = type;
     }
 
     function closeCode() {
@@ -153,7 +220,32 @@
       codeLines = [];
     }
 
-    lines.forEach((rawLine) => {
+    function parseTableCells(row) {
+      let text = row.trim();
+      if (text.startsWith("|")) text = text.slice(1);
+      if (text.endsWith("|")) text = text.slice(0, -1);
+      return text.split("|").map((cell) => cell.trim());
+    }
+
+    function isTableDivider(row) {
+      const cells = parseTableCells(row);
+      return cells.length > 1 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, "")));
+    }
+
+    function isTableRow(row) {
+      return row.includes("|") && parseTableCells(row).length > 1;
+    }
+
+    function renderTable(header, rows) {
+      const head = header.map((cell) => `<th>${renderInlineMarkdown(cell)}</th>`).join("");
+      const body = rows.map((row) => (
+        `<tr>${row.map((cell) => `<td>${renderInlineMarkdown(cell)}</td>`).join("")}</tr>`
+      )).join("");
+      html.push(`<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`);
+    }
+
+    for (let i = 0; i < lines.length; i += 1) {
+      const rawLine = lines[i];
       const line = rawLine.trimEnd();
       const trimmed = line.trim();
 
@@ -164,17 +256,17 @@
           codeOpen = true;
           codeLines = [];
         }
-        return;
+        continue;
       }
 
       if (codeOpen) {
         codeLines.push(line);
-        return;
+        continue;
       }
 
       if (!trimmed) {
         closeList();
-        return;
+        continue;
       }
 
       const heading = trimmed.match(/^(#{1,4})\s+(.+)$/);
@@ -182,29 +274,53 @@
         closeList();
         const level = Math.min(heading[1].length + 2, 5);
         html.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
-        return;
+        continue;
+      }
+
+      if (/^-{3,}$/.test(trimmed)) {
+        closeList();
+        html.push("<hr>");
+        continue;
+      }
+
+      if (isTableRow(trimmed) && lines[i + 1] && isTableDivider(lines[i + 1].trim())) {
+        closeList();
+        const header = parseTableCells(trimmed);
+        const rows = [];
+        i += 2;
+        while (i < lines.length && isTableRow(lines[i].trim())) {
+          rows.push(parseTableCells(lines[i]));
+          i += 1;
+        }
+        i -= 1;
+        renderTable(header, rows);
+        continue;
       }
 
       const bullet = trimmed.match(/^[-*]\s+(.+)$/);
       if (bullet) {
-        if (!listOpen) {
-          html.push("<ul>");
-          listOpen = true;
-        }
+        openList("ul");
         html.push(`<li>${renderInlineMarkdown(bullet[1])}</li>`);
-        return;
+        continue;
+      }
+
+      const ordered = trimmed.match(/^\d+\.\s+(.+)$/);
+      if (ordered) {
+        openList("ol");
+        html.push(`<li>${renderInlineMarkdown(ordered[1])}</li>`);
+        continue;
       }
 
       const quote = trimmed.match(/^>\s?(.+)$/);
       if (quote) {
         closeList();
         html.push(`<blockquote>${renderInlineMarkdown(quote[1])}</blockquote>`);
-        return;
+        continue;
       }
 
       closeList();
       html.push(`<p>${renderInlineMarkdown(trimmed)}</p>`);
-    });
+    }
 
     closeCode();
     closeList();
@@ -224,6 +340,7 @@
     filterDeletedSummaryNotes,
     filterSummaryNotes,
     filterSummaryNotesBySection,
+    buildSummaryLibrary,
     mergeSummaryNotes,
     upsertSummaryNote,
     updateSummaryNote,
