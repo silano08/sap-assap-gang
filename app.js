@@ -1708,9 +1708,23 @@ async function saveQuizEntry(entry) {
   view = userOf(entry);
   renderAll();
   updateLocalBadge();
-  setCommitStatus(ghToken()
-    ? "브라우저에 저장됨 · 3분마다 깃 동기화를 시도해요"
-    : "브라우저에 저장됨 · 깃 토큰을 연결하면 3분마다 동기화돼요", "");
+
+  if (!ghToken()) {
+    setCommitStatus("브라우저에 저장됨 · 깃 토큰을 연결하면 3분마다 동기화돼요", "");
+    return;
+  }
+
+  setCommitStatus("깃 커밋 중...", "pending");
+  try {
+    await commitEntry(entry);
+    removeLocal(entry);
+    refreshData();
+    renderAll();
+    updateLocalBadge();
+    setCommitStatus("깃에 바로 커밋됨 · 다른 사람도 새로고침하면 보여요", "ok");
+  } catch (err) {
+    setCommitStatus("즉시 커밋 실패: " + err.message + " · 브라우저에 남겨두고 3분마다 재시도해요", "err");
+  }
 }
 
 function quizAttemptsByKeys(keys) {
@@ -1902,7 +1916,7 @@ function init() {
     localStorage.setItem(GH_TOKEN_KEY, t);
     $("ghToken").value = "";
     updateGhState();
-    setCommitStatus("토큰 저장됨 · 로컬 저장분을 3분마다 자동 동기화해요", "ok");
+    setCommitStatus("토큰 저장됨 · 저장 버튼은 바로 커밋하고 실패분은 3분마다 재시도해요", "ok");
     syncLocalStorageToRemote().catch((err) => setCommitStatus("로컬 동기화 실패: " + err.message, "err"));
   });
   $("ghClearBtn")?.addEventListener("click", () => {

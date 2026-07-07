@@ -265,7 +265,7 @@
         </footer>
         <div class="quiz-autosave" id="quizAutoSaveState">
           <span class="autosave-spinner hidden" id="quizAutoSaveSpinner"></span>
-          <span id="quizAutoSaveText">세션 저장 후 3분마다 로컬 동기화</span>
+          <span id="quizAutoSaveText">세션 저장 시 바로 커밋 · 실패분은 3분마다 재시도</span>
         </div>
       </div>
     </section>
@@ -278,6 +278,6 @@
   <script src="study-timer.js?v=20260701-timer-fix"></script>
   <script src="study-plan.js?v=20260707-progress-sync"></script>
   <script src="summary-notes.js?v=20260707-local-sync"></script>
-  <script src="app.js?v=20260707-central-sync-only"></script>
+  <script src="app.js?v=20260707-immediate-save"></script>
 </body>
 </html>
