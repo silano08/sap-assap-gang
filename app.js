@@ -1708,23 +1708,9 @@ async function saveQuizEntry(entry) {
   view = userOf(entry);
   renderAll();
   updateLocalBadge();
-
-  if (!ghToken()) {
-    setCommitStatus("브라우저에 저장됨 · 깃 토큰을 연결하면 자동 커밋돼요", "");
-    return;
-  }
-
-  setCommitStatus("깃 커밋 중...", "pending");
-  try {
-    await commitEntry(entry);
-    removeLocal(entry);
-    refreshData();
-    renderAll();
-    updateLocalBadge();
-    setCommitStatus("깃에 커밋됨 · 다른 사람도 새로고침하면 보여요", "ok");
-  } catch (err) {
-    setCommitStatus("자동 커밋 실패: " + err.message + " · 브라우저 임시 기록에는 저장됐어요", "err");
-  }
+  setCommitStatus(ghToken()
+    ? "브라우저에 저장됨 · 3분마다 깃 동기화를 시도해요"
+    : "브라우저에 저장됨 · 깃 토큰을 연결하면 3분마다 동기화돼요", "");
 }
 
 function quizAttemptsByKeys(keys) {
