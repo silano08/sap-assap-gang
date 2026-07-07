@@ -47,6 +47,10 @@
     storage.setItem(KEY, JSON.stringify(Array.isArray(notes) ? notes : []));
   }
 
+  function hasSummaryContent(note) {
+    return !!String(note?.content || "").trim() || !!note?.contentRef;
+  }
+
   function createSummaryNote({ user, title, content, sectionId = MISC_SECTION_ID, now = new Date().toISOString() }) {
     const date = now.slice(0, 10);
     const cleanTitle = String(title || "").trim() || `${date} 요약`;
@@ -62,7 +66,7 @@
   }
 
   function addSummaryNote(storage, note) {
-    if (!note || !note.user || !String(note.content || "").trim()) return false;
+    if (!note || !note.user || !hasSummaryContent(note)) return false;
     saveSummaryNotes(storage, upsertSummaryNote(loadSummaryNotes(storage), note));
     return true;
   }
@@ -102,7 +106,7 @@
       const section = sectionMap.get(note.sectionId || MISC_SECTION_ID);
       const haystack = [
         note.title,
-        note.content,
+        summaryTextForSearch(note),
         note.date,
         note.user,
         section?.title,
@@ -151,8 +155,12 @@
 
   function normalizeSummaryNotes(notes) {
     return (Array.isArray(notes) ? notes : [])
-      .filter((note) => note && note.id && note.user && note.content)
-      .map((note) => ({ ...note, sectionId: note.sectionId || MISC_SECTION_ID }))
+      .filter((note) => note && note.id && note.user && hasSummaryContent(note))
+      .map((note) => ({
+        ...note,
+        sectionId: note.sectionId || MISC_SECTION_ID,
+        content: String(note.content || ""),
+      }))
       .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
   }
 
@@ -176,9 +184,70 @@
       sectionId: changes.sectionId || existing.sectionId || MISC_SECTION_ID,
       title: String(changes.title || "").trim() || existing.title,
       content: String(changes.content || "").trim() || existing.content,
+      contentPreview: undefined,
+      contentRef: undefined,
       updatedAt: changes.now || new Date().toISOString(),
     };
     return upsertSummaryNote(notes, updated);
+  }
+
+  function summaryTextForSearch(note) {
+    return String(note?.content || note?.contentPreview || note?.contentRef?.summary || "").trim();
+  }
+
+  function splitSummaryContent(content, chunkSize = 60000) {
+    const text = String(content || "");
+    const limit = Math.max(1, Number(chunkSize) || 60000);
+    if (text.length <= limit) return text ? [text] : [];
+    const chunks = [];
+    let current = "";
+    const lines = text.replace(/\r\n/g, "\n").split("\n");
+
+    function pushCurrent() {
+      if (!current) return;
+      chunks.push(current);
+      current = "";
+    }
+
+    lines.forEach((line) => {
+      if (line.length > limit) {
+        pushCurrent();
+        for (let i = 0; i < line.length; i += limit) {
+          chunks.push(line.slice(i, i + limit));
+        }
+        return;
+      }
+      const next = current ? `${current}\n${line}` : line;
+      if (next.length > limit) {
+        pushCurrent();
+        current = line;
+      } else {
+        current = next;
+      }
+    });
+    pushCurrent();
+    return chunks;
+  }
+
+  function createChunkedSummaryNote(note, { chunkSize = 60000, baseDir = "summary-chunks" } = {}) {
+    const chunks = splitSummaryContent(note?.content || "", chunkSize);
+    const cleanBase = String(baseDir || "summary-chunks").replace(/\/+$/, "");
+    const files = chunks.map((text, index) => ({
+      path: `${cleanBase}/${note.id}-${String(index + 1).padStart(3, "0")}.md`,
+      text,
+    }));
+    return {
+      note: {
+        ...note,
+        content: "",
+        contentPreview: String(note?.content || "").trim().slice(0, 500),
+        contentRef: {
+          type: "chunks",
+          paths: files.map((file) => file.path),
+        },
+      },
+      files,
+    };
   }
 
   function escapeHtml(value) {
@@ -329,6 +398,7 @@
 
   return {
     KEY,
+    DELETED_KEY,
     MISC_SECTION_ID,
     createSummaryNote,
     addSummaryNote,
@@ -337,13 +407,17 @@
     removeSummaryNote,
     markSummaryNoteDeleted,
     loadDeletedSummaryIds,
+    saveDeletedSummaryIds,
     filterDeletedSummaryNotes,
     filterSummaryNotes,
     filterSummaryNotesBySection,
     buildSummaryLibrary,
+    normalizeSummaryNotes,
     mergeSummaryNotes,
     upsertSummaryNote,
     updateSummaryNote,
+    splitSummaryContent,
+    createChunkedSummaryNote,
     markdownToHtml,
   };
 });

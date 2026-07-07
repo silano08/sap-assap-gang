@@ -17,6 +17,8 @@ const {
   buildSummaryLibrary,
   MISC_SECTION_ID,
   updateSummaryNote,
+  splitSummaryContent,
+  createChunkedSummaryNote,
 } = require("./summary-notes");
 
 function fakeStorage(seed = {}) {
@@ -255,4 +257,37 @@ test("markdownToHtml renders horizontal rules and ordered lists", () => {
   ].join("\n"));
 
   assert.match(html, /<p>첫 문단<\/p><hr><ol><li>첫째<\/li><li>둘째<\/li><\/ol>/);
+});
+
+test("splitSummaryContent splits large markdown on line boundaries when possible", () => {
+  const content = ["# Title", "A".repeat(10), "B".repeat(10), "C".repeat(10)].join("\n");
+
+  const chunks = splitSummaryContent(content, 18);
+
+  assert.deepEqual(chunks, ["# Title\nAAAAAAAAAA", "BBBBBBBBBB", "CCCCCCCCCC"]);
+});
+
+test("createChunkedSummaryNote stores large content as external chunk references", () => {
+  const note = {
+    id: "note-1",
+    user: "가연",
+    date: "2026-07-07",
+    title: "큰 요약",
+    content: "A".repeat(20),
+    createdAt: "2026-07-07T01:00:00.000Z",
+  };
+
+  const chunked = createChunkedSummaryNote(note, { chunkSize: 8, baseDir: "summary-chunks" });
+
+  assert.equal(chunked.note.content, "");
+  assert.deepEqual(chunked.note.contentRef, {
+    type: "chunks",
+    paths: [
+      "summary-chunks/note-1-001.md",
+      "summary-chunks/note-1-002.md",
+      "summary-chunks/note-1-003.md",
+    ],
+  });
+  assert.deepEqual(chunked.files.map((file) => file.path), chunked.note.contentRef.paths);
+  assert.deepEqual(chunked.files.map((file) => file.text), ["AAAAAAAA", "AAAAAAAA", "AAAA"]);
 });

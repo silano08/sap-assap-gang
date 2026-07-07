@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AWS SAP 스터디 트래커</title>
-  <link rel="stylesheet" href="style.css?v=20260705-codeblock-flex" />
+  <link rel="stylesheet" href="style.css?v=20260707-prev-enabled" />
 </head>
 <body>
   <div class="wrap">
@@ -104,6 +104,7 @@
             <button class="btn primary" id="progressSaveBtn" type="button">진도 저장</button>
           </div>
           <p class="hint" id="progressStatus"></p>
+          <p class="hint progress-sync-status" id="progressSyncStatus"></p>
           <div class="progress-compare" id="progressCompare"></div>
           <div class="section-list" id="sectionList"></div>
         </div>
@@ -148,17 +149,23 @@
       <div id="compareTable" class="compare"></div>
     </section>
 
-    <!-- ── 최근 추이 ────────────────────────── -->
-    <section class="card">
-      <h2 class="card-title">📈 최근 추이</h2>
-      <div id="trend" class="trend"></div>
+    <section class="card sync-card">
+      <h2 class="card-title">⚙ 동기화</h2>
       <div id="loadFallback" class="fallback hidden">
         <p>브라우저 보안 때문에 기존 기록을 불러오지 못했어요. GitHub Pages나 로컬 서버 주소로 열어주세요.</p>
       </div>
-    </section>
-
-    <section class="card sync-card">
-      <h2 class="card-title">⚙ 동기화</h2>
+      <details class="gh-setup quiz-bank-setup">
+        <summary>문제은행 설정</summary>
+        <p class="hint">DOCX는 한 번 파싱하면 브라우저에 문제 JSON만 저장돼요. 다른 덤프로 바꿀 때만 교체하면 됩니다.</p>
+        <div class="quiz-loader">
+          <label class="file-btn">
+            DOCX 선택/교체
+            <input type="file" id="quizFile" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+          </label>
+          <button class="btn small ghost hidden" id="quizClearCacheBtn" type="button">문제은행 삭제</button>
+          <div class="quiz-status" id="quizBankStatus">문제은행 대기 중</div>
+        </div>
+      </details>
       <div class="local-badge hidden" id="localBadge">
         💾 이 브라우저 임시 기록 <b id="localCount">0</b>개
         <button id="clearLocalBtn" class="btn small ghost">비우기</button>
@@ -216,14 +223,13 @@
         <button class="modal-close" id="quizCloseBtn" type="button" aria-label="문제풀이 닫기">×</button>
       </header>
 
-      <div class="quiz-loader">
-        <label class="file-btn">
-          DOCX 선택/교체
-          <input type="file" id="quizFile" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
-        </label>
-        <button class="btn small ghost hidden" id="quizClearCacheBtn" type="button">문제은행 삭제</button>
-        <div class="quiz-status" id="quizStatus">DOCX를 선택하면 바로 문제풀이가 시작됩니다.</div>
+      <div class="quiz-mode-tabs" role="tablist" aria-label="문제풀이 모드">
+        <button class="quiz-mode-tab active" id="quizRandomModeBtn" type="button">랜덤하게 풀기</button>
+        <button class="quiz-mode-tab" id="quizWrongModeBtn" type="button">틀린 문제만 다시 풀기 <span id="quizWrongCount"></span></button>
       </div>
+      <div class="quiz-mode-status hidden" id="quizModeStatus"></div>
+
+      <div class="quiz-status" id="quizStatus">동기화 카드의 문제은행 설정에서 DOCX를 선택하면 바로 시작됩니다.</div>
 
       <div class="quiz-ready hidden" id="quizReady">
         <strong id="quizCount">0문제</strong>
@@ -238,12 +244,6 @@
           <span id="quizSessionAccuracy">정답률 –</span>
         </div>
 
-        <div class="quiz-modal-tools">
-          <input type="number" id="quizJump" min="1" placeholder="Q번호" />
-          <button class="btn small" id="quizJumpBtn" type="button">이동</button>
-          <button class="btn small" id="quizRandomBtn" type="button">랜덤</button>
-        </div>
-
         <article class="quiz-question">
           <div class="quiz-qtop">
             <span class="quiz-number" id="quizNumber">Q–</span>
@@ -256,12 +256,17 @@
 
         <footer class="modal-actions">
           <button class="btn" id="quizRevealBtn" type="button">정답 보기</button>
+          <button class="btn ghost" id="quizPrevBtn" type="button" disabled>이전 문제</button>
           <button class="btn primary" id="quizNextBtn" type="button">다음 랜덤</button>
           <span class="save-preview-wrap" id="quizApplyWrap">
             <button class="btn ghost" id="quizApplyBtn" type="button" disabled>세션 저장</button>
             <div class="save-preview" id="quizSavePreview" role="status"></div>
           </span>
         </footer>
+        <div class="quiz-autosave" id="quizAutoSaveState">
+          <span class="autosave-spinner hidden" id="quizAutoSaveSpinner"></span>
+          <span id="quizAutoSaveText">세션 저장 후 3분마다 로컬 동기화</span>
+        </div>
       </div>
     </section>
   </div>
@@ -269,10 +274,10 @@
   <script src="vendor/jszip.min.js?v=20260628"></script>
   <script src="quiz-parser.js?v=20260628"></script>
   <script src="quiz-cache.js?v=20260628-notes-cache"></script>
-  <script src="quiz-session.js?v=20260628-save-preview"></script>
+  <script src="quiz-session.js?v=20260707-local-sync"></script>
   <script src="study-timer.js?v=20260701-timer-fix"></script>
-  <script src="study-plan.js?v=20260701-plan"></script>
-  <script src="summary-notes.js?v=20260705-markdown-fix"></script>
-  <script src="app.js?v=20260705-summary-browser"></script>
+  <script src="study-plan.js?v=20260707-progress-sync"></script>
+  <script src="summary-notes.js?v=20260707-local-sync"></script>
+  <script src="app.js?v=20260707-local-sync"></script>
 </body>
 </html>

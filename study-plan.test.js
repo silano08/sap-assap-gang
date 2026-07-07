@@ -8,6 +8,8 @@ const {
   updateProgress,
   progressForUser,
   compareProgress,
+  mergeProgress,
+  completedSectionIds,
 } = require("./study-plan");
 
 function fakeStorage(seed = {}) {
@@ -60,4 +62,30 @@ test("compareProgress returns each user's section position", () => {
   assert.equal(rows[0].section.title, "컴퓨팅(Compute) & 로드 밸런싱");
   assert.equal(rows[0].percent, 11);
   assert.equal(rows[1].done, true);
+});
+
+test("completedSectionIds treats earlier sections as complete when the user is on a later section", () => {
+  const ids = completedSectionIds({
+    user: "가연",
+    sectionId: "section-5",
+    lecture: 1,
+    done: false,
+  });
+
+  assert.equal(ids.has("section-2"), true);
+  assert.equal(ids.has("section-3"), true);
+  assert.equal(ids.has("section-4"), true);
+  assert.equal(ids.has("section-5"), false);
+});
+
+test("mergeProgress keeps the newest progress per user for remote sync", () => {
+  const merged = mergeProgress([
+    { user: "가연", sectionId: "section-3", lecture: 2, updatedAt: "2026-07-07T01:00:00.000Z" },
+    { user: "소울", sectionId: "section-4", lecture: 1, updatedAt: "2026-07-07T03:00:00.000Z" },
+  ], [
+    { user: "가연", sectionId: "section-5", lecture: 4, updatedAt: "2026-07-07T02:00:00.000Z" },
+  ]);
+
+  assert.equal(progressForUser(merged, "가연").sectionId, "section-5");
+  assert.equal(progressForUser(merged, "소울").sectionId, "section-4");
 });

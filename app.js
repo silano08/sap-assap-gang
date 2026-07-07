@@ -8,7 +8,16 @@
 =================================================================== */
 
 const LOG_FILE = "study-log.jsonl";
+const QUIZ_HISTORY_FILE = "quiz-history.json";
+const WRONG_QUIZ_FILE = "wrong-quiz.json";
 const SUMMARY_FILE = "summary-notes-20260702.json";
+const SUMMARY_CHUNK_DIR = "summary-chunks";
+const SUMMARY_CHUNK_THRESHOLD = 60000;
+const STUDY_PROGRESS_FILE = "study-progress.json";
+const LOCAL_SYNC_MS = 3 * 60 * 1000;
+const WRONG_QUIZ_KEY = "sap-wrong-quiz-bank-v1";
+const WRONG_QUIZ_DELETED_KEY = "sap-wrong-quiz-deleted-v1";
+const QUIZ_HISTORY_LOCAL_KEY = "sap-quiz-history-local-v1";
 const ALL_VIEW = "__ALL__";
 const DEFAULT_USERS = ["가연", "소울"]; // 로그가 비어도 토글에 항상 표시
 const PALETTE = ["#ff9900", "#2f6fed", "#1a8754", "#c026d3"]; // 유저별 색
@@ -23,6 +32,9 @@ let summaryEditingId = null;
 let summarySearchQuery = "";
 let summaryFilterSection = "";
 let summaryModalNoteId = null;
+let localSyncTimer = null;
+let localSyncRunning = false;
+const SUMMARY_CONTENT_CACHE = new Map();
 
 const LS_KEY = "sap-local-entries-v1"; // 이 브라우저 임시 저장
 
@@ -127,6 +139,21 @@ async function ghPutFile(path, text, sha, message) {
   return fetch(url, { method: "PUT", headers: ghHeaders(), body: JSON.stringify(body) });
 }
 
+async function commitTextFile(path, text, message) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { sha } = await ghGetFile(path);
+    const res = await ghPutFile(path, text, sha, message);
+    if (res.ok) return true;
+    if (res.status === 409) continue;
+    throw new Error(res.status === 401 ? "토큰 권한/만료 확인" : "HTTP " + res.status);
+  }
+  throw new Error("커밋 충돌 — 다시 눌러줘");
+}
+
+function sameJson(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 // 최신본 받아 → 줄 교체 → 커밋. 충돌(409)나면 한 번 재시도.
 async function commitEntry(entry) {
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -162,7 +189,13 @@ async function commitSummaryNotes(nextNotes, message) {
   for (let attempt = 0; attempt < 2; attempt++) {
     const { sha, text } = await ghGetFile(SUMMARY_FILE);
     const remote = parseSummaryJson(text);
-    const merged = window.SapSummaryNotes.mergeSummaryNotes(remote, nextNotes);
+    const prepared = await prepareSummaryNotesForRemote(nextNotes, message);
+    const merged = window.SapSummaryNotes.mergeSummaryNotes(remote, prepared);
+    if (sameJson(window.SapSummaryNotes.normalizeSummaryNotes(remote), merged)) {
+      REMOTE_SUMMARIES = merged;
+      writeLocalSummaryNotes(merged);
+      return false;
+    }
     const newText = JSON.stringify(merged, null, 2) + "\n";
     const res = await ghPutFile(SUMMARY_FILE, newText, sha, message);
     if (res.ok) {
@@ -176,6 +209,29 @@ async function commitSummaryNotes(nextNotes, message) {
   throw new Error("커밋 충돌 — 다시 눌러줘");
 }
 
+async function prepareSummaryNotesForRemote(notes, message) {
+  const prepared = [];
+  const files = [];
+  window.SapSummaryNotes.normalizeSummaryNotes?.(notes);
+  (Array.isArray(notes) ? notes : []).forEach((note) => {
+    if (String(note.content || "").length > SUMMARY_CHUNK_THRESHOLD) {
+      const chunked = window.SapSummaryNotes.createChunkedSummaryNote(note, {
+        chunkSize: SUMMARY_CHUNK_THRESHOLD,
+        baseDir: SUMMARY_CHUNK_DIR,
+      });
+      prepared.push(chunked.note);
+      files.push(...chunked.files);
+    } else {
+      prepared.push(note);
+    }
+  });
+
+  for (const file of files) {
+    await commitTextFile(file.path, file.text, `${message} chunk ${file.path.split("/").pop()}`);
+  }
+  return prepared;
+}
+
 async function commitSummaryDelete(id) {
   for (let attempt = 0; attempt < 2; attempt++) {
     const { sha, text } = await ghGetFile(SUMMARY_FILE);
@@ -187,6 +243,7 @@ async function commitSummaryDelete(id) {
     if (res.ok) {
       REMOTE_SUMMARIES = merged;
       writeLocalSummaryNotes(merged);
+      window.SapSummaryNotes.saveDeletedSummaryIds(localStorage, window.SapSummaryNotes.loadDeletedSummaryIds(localStorage).filter((deletedId) => deletedId !== id));
       return true;
     }
     if (res.status === 409) continue;
@@ -441,13 +498,17 @@ function renderSummaryNotes(user) {
         <span class="summary-note-title">${escapeHtml(note.title)}</span>
         <span class="summary-note-meta">${userTag}${escapeHtml(note.date)}</span>
       </span>
-      <span class="summary-note-preview">${escapeHtml(summaryPreview(note.content))}</span>
+      <span class="summary-note-preview">${escapeHtml(summaryPreview(summaryContentForPreview(note)))}</span>
     `;
     item.addEventListener("click", () => openSummaryModal(note.id));
       body.appendChild(item);
     });
     box.appendChild(group);
   });
+}
+
+function summaryContentForPreview(note) {
+  return note?.content || note?.contentPreview || note?.contentRef?.summary || "";
 }
 
 function summaryPreview(content) {
@@ -459,20 +520,35 @@ function summaryPreview(content) {
     .slice(0, 130) || "내용 미리보기가 없어요.";
 }
 
+async function loadSummaryNoteContent(note) {
+  if (!note) return "";
+  if (SUMMARY_CONTENT_CACHE.has(note.id)) return SUMMARY_CONTENT_CACHE.get(note.id);
+  if (String(note.content || "").trim()) return note.content;
+  const paths = note.contentRef?.type === "chunks" ? note.contentRef.paths : [];
+  if (!Array.isArray(paths) || !paths.length) return note.contentPreview || "";
+  const chunks = [];
+  for (const path of paths) {
+    const res = await fetch(path + "?v=" + Date.now(), { cache: "no-store" });
+    if (!res.ok) throw new Error(`chunk ${res.status}`);
+    chunks.push(await res.text());
+  }
+  return chunks.join("");
+}
+
 function summarySectionLabel(note) {
   const section = summarySections().find((item) => item.id === (note?.sectionId || window.SapSummaryNotes.MISC_SECTION_ID));
   if (!section) return "기타";
   return section.number ? `섹션 ${section.number} · ${section.title}` : section.title;
 }
 
-function openSummaryModal(id) {
+async function openSummaryModal(id) {
   const note = summaryNotesForDisplay().find((item) => item.id === id);
   if (!note) return;
   summaryModalNoteId = id;
   $("summaryModalTitle").textContent = note.title;
   $("summaryModalSection").textContent = summarySectionLabel(note);
   $("summaryModalMeta").innerHTML = `${dot(note.user)}${escapeHtml(note.user)} · ${escapeHtml(note.date)}`;
-  $("summaryModalContent").innerHTML = window.SapSummaryNotes.markdownToHtml(note.content);
+  $("summaryModalContent").innerHTML = '<p class="muted">요약을 불러오는 중...</p>';
   const canEdit = note.user === activeEntryUser();
   $("summaryModalEditBtn").disabled = !canEdit;
   $("summaryModalDeleteBtn").disabled = !canEdit;
@@ -480,6 +556,46 @@ function openSummaryModal(id) {
   $("summaryModalDeleteBtn").dataset.summaryDelete = id;
   $("summaryModal").classList.remove("hidden");
   document.body.classList.add("modal-open");
+  try {
+    const content = await loadSummaryNoteContent(note);
+    if (summaryModalNoteId === id) $("summaryModalContent").innerHTML = window.SapSummaryNotes.markdownToHtml(content);
+  } catch (err) {
+    $("summaryModalContent").innerHTML = `<p class="muted">요약 본문을 불러오지 못했어요: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function parseProgressJson(text) {
+  try {
+    const parsed = JSON.parse(text || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseQuizHistoryJson(text) {
+  try {
+    const parsed = JSON.parse(text || "[]");
+    return window.SapQuizSession.normalizeQuizHistoryRecords(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    return [];
+  }
+}
+
+function parseWrongQuizJson(text) {
+  try {
+    const parsed = JSON.parse(text || "[]");
+    return window.SapQuizSession.normalizeWrongQuizRecords(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    return [];
+  }
+}
+
+function setProgressSyncStatus(text, kind = "") {
+  const el = $("progressSyncStatus");
+  if (!el) return;
+  el.textContent = text;
+  el.className = "hint progress-sync-status" + (kind ? " " + kind : "");
 }
 
 function closeSummaryModal() {
@@ -536,6 +652,7 @@ async function saveSummaryNote() {
   const note = summaryEditingId
     ? nextLocalNotes.find((item) => item.id === summaryEditingId)
     : nextLocalNotes[0];
+  SUMMARY_CONTENT_CACHE.set(note.id, content);
   writeLocalSummaryNotes(nextLocalNotes);
   let synced = false;
   if (ghToken()) {
@@ -564,7 +681,7 @@ function resetSummaryForm() {
   $("summaryCancelEditBtn")?.classList.add("hidden");
 }
 
-function editSummaryNote(ev) {
+async function editSummaryNote(ev) {
   ev.preventDefault();
   ev.stopPropagation();
   const id = ev.currentTarget.dataset.summaryEdit;
@@ -578,12 +695,127 @@ function editSummaryNote(ev) {
   populateSummarySectionSelect($("summarySection"));
   $("summarySection").value = note.sectionId || window.SapSummaryNotes.MISC_SECTION_ID;
   $("summaryTitle").value = note.title;
-  $("summaryContent").value = note.content;
+  $("summaryContent").value = note.content || "본문을 불러오는 중...";
   $("summarySaveBtn").textContent = "수정 저장";
   $("summaryCancelEditBtn")?.classList.remove("hidden");
   setSummaryStatus("요약을 수정하는 중이에요.", "pending");
   closeSummaryModal();
   $("summaryContent").focus();
+  try {
+    $("summaryContent").value = await loadSummaryNoteContent(note);
+  } catch (err) {
+    setSummaryStatus("요약 본문 로딩 실패: " + err.message, "err");
+    $("summaryContent").value = note.content || note.contentPreview || "";
+  }
+}
+
+async function loadRemoteStudyProgress() {
+  if (!window.SapStudyPlan) return [];
+  try {
+    const res = await fetch(STUDY_PROGRESS_FILE + "?v=" + Date.now(), { cache: "no-store" });
+    if (!res.ok) {
+      if (res.status === 404) return [];
+      throw new Error("HTTP " + res.status);
+    }
+    return window.SapStudyPlan.mergeProgress(parseProgressJson(await res.text()));
+  } catch (err) {
+    console.warn("진도 fetch 실패:", err.message);
+    return [];
+  }
+}
+
+async function commitStudyProgress(items) {
+  const normalized = window.SapStudyPlan.mergeProgress(items);
+  await commitTextFile(STUDY_PROGRESS_FILE, JSON.stringify(normalized, null, 2) + "\n", "plan: sync study progress");
+  return normalized;
+}
+
+async function syncStudyProgress({ pushLocal = false, quiet = false } = {}) {
+  if (!window.SapStudyPlan) return;
+  if (!quiet) setProgressSyncStatus("진도 동기화 확인 중...", "pending");
+  const local = window.SapStudyPlan.loadProgress(localStorage);
+  const remote = await loadRemoteStudyProgress();
+  const merged = window.SapStudyPlan.mergeProgress(remote, local);
+  const changedLocal = !sameJson(window.SapStudyPlan.mergeProgress(local), merged);
+  if (changedLocal) window.SapStudyPlan.saveProgress(localStorage, merged);
+
+  if (pushLocal && ghToken() && !sameJson(window.SapStudyPlan.mergeProgress(remote), merged)) {
+    await commitStudyProgress(merged);
+    if (!quiet) setProgressSyncStatus("진도 동기화 완료 · 원격 반영됨", "ok");
+  } else if (!quiet) {
+    setProgressSyncStatus(changedLocal ? "원격 진도를 반영했어요." : "진도 동기화 최신 상태", changedLocal ? "ok" : "");
+  }
+  renderStudyPlan();
+}
+
+async function syncLocalEntriesToRemote() {
+  const entries = loadLocal();
+  for (const entry of entries) {
+    await commitEntry(entry);
+    removeLocal(entry);
+  }
+  if (entries.length) {
+    refreshData();
+    renderAll();
+    updateLocalBadge();
+  }
+  return entries.length;
+}
+
+async function syncSummaryLocalToRemote() {
+  if (!window.SapSummaryNotes) return 0;
+  let changed = 0;
+  const deletedIds = window.SapSummaryNotes.loadDeletedSummaryIds(localStorage);
+  for (const id of deletedIds) {
+    await commitSummaryDelete(id);
+    changed += 1;
+  }
+
+  const localNotes = window.SapSummaryNotes.loadSummaryNotes(localStorage);
+  if (localNotes.length) {
+    const committed = await commitSummaryNotes(summaryNotesForDisplay(), "notes: sync local summaries");
+    if (committed) changed += 1;
+  }
+  return changed;
+}
+
+async function syncQuizLocalToRemote() {
+  if (!window.SapQuizSession) return 0;
+  let changed = 0;
+  const history = loadLocalQuizHistory();
+  if (history.length) {
+    await commitQuizHistoryRecords(history);
+    changed += 1;
+  }
+
+  const wrongRecords = loadWrongQuizRecords();
+  const deletedWrongIds = loadDeletedWrongQuizIds();
+  if (wrongRecords.length || deletedWrongIds.length) {
+    await commitWrongQuizRecords(wrongRecords, deletedWrongIds);
+    changed += 1;
+  }
+  return changed;
+}
+
+async function syncLocalStorageToRemote({ quiet = false } = {}) {
+  if (!ghToken() || localSyncRunning) return;
+  localSyncRunning = true;
+  if (!quiet) setCommitStatus("로컬 저장분 동기화 중...", "pending");
+  try {
+    const [entryCount, summaryCount, quizCount] = await Promise.all([
+      syncLocalEntriesToRemote(),
+      syncSummaryLocalToRemote(),
+      syncQuizLocalToRemote(),
+      syncStudyProgress({ pushLocal: true, quiet: true }),
+    ]);
+    if (!quiet) setCommitStatus(`로컬 동기화 완료 · 기록 ${entryCount} · 요약 ${summaryCount} · 퀴즈 ${quizCount}`, "ok");
+    setProgressSyncStatus("진도 동기화 확인 완료", "ok");
+  } catch (err) {
+    console.warn("로컬 저장분 동기화 실패:", err.message);
+    setCommitStatus("로컬 동기화 실패: " + err.message, "err");
+  } finally {
+    localSyncRunning = false;
+  }
 }
 
 async function deleteSummaryNote(ev) {
@@ -775,7 +1007,11 @@ function renderSectionList(rows) {
     const marks = USERS.map((user) => {
       const row = byUser.get(user);
       const here = row?.section.id === section.id;
-      return `<span class="section-user ${here ? "here" : ""}">${dot(user)}${escapeHtml(user)}${here ? ` ${row.lecture || 0}/${section.lectures || "-"}${row.done ? " 완료" : ""}` : ""}</span>`;
+      const completed = row?.progress && window.SapStudyPlan.completedSectionIds(row.progress).has(section.id);
+      const label = here
+        ? ` ${row.lecture || 0}/${section.lectures || "-"}${row.done ? " 완료" : ""}`
+        : completed ? " 완료" : "";
+      return `<span class="section-user ${here ? "here" : ""} ${completed ? "done" : ""}">${dot(user)}${escapeHtml(user)}${label}</span>`;
     }).join("");
     return `
       <div class="section-row">
@@ -790,12 +1026,12 @@ function renderSectionList(rows) {
   }).join("");
 }
 
-function saveStudyProgress() {
+async function saveStudyProgress() {
   const user = activeEntryUser();
   if (!user || !window.SapStudyPlan) return;
   const section = window.SapStudyPlan.sectionById($("progressSection").value);
   const lecture = Math.max(0, Math.min(Number($("progressLecture").value || 0), section.lectures || Number($("progressLecture").value || 0)));
-  window.SapStudyPlan.updateProgress(localStorage, {
+  const next = window.SapStudyPlan.updateProgress(localStorage, {
     user,
     sectionId: section.id,
     lecture,
@@ -806,10 +1042,22 @@ function saveStudyProgress() {
   $("progressStatus").className = "hint ok";
   renderStudyPlan();
   renderUser(user);
+  if (!ghToken()) {
+    setProgressSyncStatus("브라우저에 저장됨 · 토큰 연결 시 원격 동기화돼요", "");
+    return;
+  }
+  try {
+    setProgressSyncStatus("진도 원격 반영 중...", "pending");
+    await commitStudyProgress(next);
+    setProgressSyncStatus("진도 원격 반영 완료", "ok");
+  } catch (err) {
+    setProgressSyncStatus("진도 원격 반영 실패: " + err.message, "err");
+  }
 }
 
 function renderTrend(entries) {
   const box = $("trend");
+  if (!box) return;
   box.innerHTML = "";
   const recent = entries.slice(-7);
   if (!recent.length) { box.innerHTML = '<p class="empty">기록 없음</p>'; return; }
@@ -833,6 +1081,7 @@ function renderTrend(entries) {
 
 function renderTrendCombined() {
   const box = $("trend");
+  if (!box) return;
   box.innerHTML = "";
 
   const dates = [...new Set(ALL.map((e) => e.date))].sort().slice(-7);
@@ -907,40 +1156,219 @@ function escapeHtml(s) {
 /* ── DOCX 문제풀이 ───────────────────────────────────── */
 const quiz = {
   questions: [],
+  reviewQuestions: [],
+  mode: "all",
   current: 0,
   selected: new Set(),
   revealed: false,
   source: "",
   savedAt: "",
   attempts: new Map(),
+  drafts: new Map(),
+  history: [],
+  historyPos: -1,
+  dirtyHistoryKeys: new Set(),
+  unsavedLogKeys: new Set(),
+  autoSaving: false,
 };
 
 function setQuizStatus(text, kind = "") {
-  const el = $("quizStatus");
+  ["quizStatus", "quizBankStatus"].forEach((id) => {
+    const el = $(id);
+    if (!el) return;
+    el.textContent = text;
+    el.className = "quiz-status" + (kind ? " " + kind : "");
+  });
+}
+
+function setQuizModeStatus(text = "", kind = "") {
+  const el = $("quizModeStatus");
   if (!el) return;
   el.textContent = text;
-  el.className = "quiz-status" + (kind ? " " + kind : "");
+  el.className = "quiz-mode-status" + (kind ? " " + kind : "");
+  el.classList.toggle("hidden", !text);
+}
+
+function loadWrongQuizRecords() {
+  try {
+    return window.SapQuizSession.normalizeWrongQuizRecords(JSON.parse(localStorage.getItem(WRONG_QUIZ_KEY) || "[]"));
+  } catch {
+    return [];
+  }
+}
+
+function saveWrongQuizRecords(records) {
+  localStorage.setItem(WRONG_QUIZ_KEY, JSON.stringify(window.SapQuizSession.normalizeWrongQuizRecords(records)));
+}
+
+function loadDeletedWrongQuizIds() {
+  try {
+    const ids = JSON.parse(localStorage.getItem(WRONG_QUIZ_DELETED_KEY) || "[]");
+    return Array.isArray(ids) ? ids.filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveDeletedWrongQuizIds(ids) {
+  localStorage.setItem(WRONG_QUIZ_DELETED_KEY, JSON.stringify([...new Set(Array.isArray(ids) ? ids.filter(Boolean) : [])]));
+}
+
+function markWrongQuizRecordDeleted(id) {
+  if (!id) return;
+  saveDeletedWrongQuizIds([...loadDeletedWrongQuizIds(), id]);
+}
+
+function loadLocalQuizHistory() {
+  try {
+    return window.SapQuizSession.normalizeQuizHistoryRecords(JSON.parse(localStorage.getItem(QUIZ_HISTORY_LOCAL_KEY) || "[]"));
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalQuizHistory(records) {
+  localStorage.setItem(QUIZ_HISTORY_LOCAL_KEY, JSON.stringify(window.SapQuizSession.normalizeQuizHistoryRecords(records)));
+}
+
+async function commitQuizHistoryRecords(records) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { sha, text } = await ghGetFile(QUIZ_HISTORY_FILE);
+    const remote = parseQuizHistoryJson(text);
+    const merged = window.SapQuizSession.mergeQuizHistoryRecords(remote, records);
+    if (sameJson(remote, merged)) {
+      saveLocalQuizHistory(merged);
+      return merged;
+    }
+    const res = await ghPutFile(QUIZ_HISTORY_FILE, JSON.stringify(merged, null, 2) + "\n", sha, "quiz: sync solved history");
+    if (res.ok) {
+      saveLocalQuizHistory(merged);
+      return merged;
+    }
+    if (res.status === 409) continue;
+    throw new Error(res.status === 401 ? "토큰 권한/만료 확인" : "HTTP " + res.status);
+  }
+  throw new Error("커밋 충돌 — 다시 눌러줘");
+}
+
+async function commitWrongQuizRecords(records, deletedIds = []) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { sha, text } = await ghGetFile(WRONG_QUIZ_FILE);
+    const remote = parseWrongQuizJson(text);
+    const merged = window.SapQuizSession.mergeWrongQuizRecords(remote, records, { deletedIds });
+    if (sameJson(remote, merged)) {
+      saveWrongQuizRecords(merged);
+      if (deletedIds.length) saveDeletedWrongQuizIds([]);
+      return merged;
+    }
+    const res = await ghPutFile(WRONG_QUIZ_FILE, JSON.stringify(merged, null, 2) + "\n", sha, "quiz: sync wrong records");
+    if (res.ok) {
+      saveWrongQuizRecords(merged);
+      if (deletedIds.length) saveDeletedWrongQuizIds([]);
+      return merged;
+    }
+    if (res.status === 409) continue;
+    throw new Error(res.status === 401 ? "토큰 권한/만료 확인" : "HTTP " + res.status);
+  }
+  throw new Error("커밋 충돌 — 다시 눌러줘");
+}
+
+function quizAttemptKey(question) {
+  return window.SapQuizSession.quizAttemptStorageKey(quiz.mode, question);
+}
+
+function quizHistoryRecordFor(question, attempt) {
+  return window.SapQuizSession.createQuizHistoryRecord({
+    user: activeEntryUser(),
+    source: attempt?.source || question?.wrongSource || quiz.source,
+    mode: attempt?.mode || (quiz.mode === "wrong" ? "wrong" : "random"),
+    question: attempt?.question || question,
+    attempt,
+  });
+}
+
+function wrongRecordsForActiveUser() {
+  const user = activeEntryUser();
+  if (!user) return [];
+  return window.SapQuizSession.wrongRecordsForUser(loadWrongQuizRecords(), user);
+}
+
+function activeQuizQuestions() {
+  return quiz.mode === "wrong" ? quiz.reviewQuestions : quiz.questions;
+}
+
+function activeQuizQuestion() {
+  return activeQuizQuestions()[quiz.current];
+}
+
+function saveCurrentQuizDraft() {
+  const q = activeQuizQuestion();
+  if (!q) return;
+  quiz.drafts.set(`${quiz.mode}:${q.number}`, {
+    selected: [...quiz.selected],
+    revealed: quiz.revealed,
+  });
+}
+
+function restoreQuizDraft(q) {
+  const attempt = quiz.attempts.get(quizAttemptKey(q));
+  const draft = quiz.drafts.get(`${quiz.mode}:${q.number}`);
+  quiz.selected = new Set(attempt?.selected || draft?.selected || []);
+  quiz.revealed = !!attempt || !!draft?.revealed;
+}
+
+function navigateQuizTo(index, { pushHistory = true, status = "" } = {}) {
+  const questions = activeQuizQuestions();
+  if (!questions.length) return;
+  const nextIndex = Math.max(0, Math.min(index, questions.length - 1));
+  saveCurrentQuizDraft();
+  quiz.current = nextIndex;
+  restoreQuizDraft(questions[nextIndex]);
+  if (pushHistory) {
+    quiz.history = quiz.history.slice(0, quiz.historyPos + 1);
+    if (quiz.history[quiz.history.length - 1] !== nextIndex) quiz.history.push(nextIndex);
+    quiz.historyPos = quiz.history.length - 1;
+  }
+  if (status) setQuizModeStatus(status, "ok");
+  renderQuizQuestion();
+}
+
+function resetQuizNavigation() {
+  quiz.current = 0;
+  quiz.selected = new Set();
+  quiz.revealed = false;
+  quiz.drafts = new Map();
+  quiz.history = [];
+  quiz.historyPos = -1;
 }
 
 function loadQuizBank(questions, source, savedAt = "") {
   quiz.questions = Array.isArray(questions) ? questions : [];
-  quiz.current = 0;
-  quiz.selected = new Set();
-  quiz.revealed = false;
+  quiz.reviewQuestions = [];
+  quiz.mode = "all";
+  resetQuizNavigation();
   quiz.source = source || "저장된 문제은행";
   quiz.savedAt = savedAt;
   quiz.attempts = new Map();
+  quiz.dirtyHistoryKeys = new Set();
+  quiz.unsavedLogKeys = new Set();
   renderQuizBankState();
 }
 
 function renderQuizBankState() {
-  const hasBank = !!quiz.questions.length;
+  const hasBank = !!activeQuizQuestions().length;
+  const wrongCount = wrongRecordsForActiveUser().length;
   $("quizReady")?.classList.toggle("hidden", !hasBank);
   $("quizPlayArea")?.classList.toggle("hidden", !hasBank);
-  $("quizClearCacheBtn")?.classList.toggle("hidden", !hasBank);
+  $("quizClearCacheBtn")?.classList.toggle("hidden", !quiz.questions.length);
+  $("quizRandomModeBtn")?.classList.toggle("active", quiz.mode !== "wrong");
+  $("quizWrongModeBtn")?.classList.toggle("active", quiz.mode === "wrong");
+  if ($("quizWrongModeBtn")) $("quizWrongModeBtn").disabled = !wrongCount;
+  if ($("quizWrongCount")) $("quizWrongCount").textContent = wrongCount ? `${wrongCount}` : "0";
+  if (quiz.mode !== "wrong" && $("quizModeStatus")) setQuizModeStatus("");
   if (hasBank) {
-    $("quizCount").textContent = `${quiz.questions.length}문제`;
-    $("quizSource").textContent = ` · ${quiz.source}`;
+    $("quizCount").textContent = quiz.mode === "wrong" ? `${activeQuizQuestions().length}오답` : `${quiz.questions.length}문제`;
+    $("quizSource").textContent = quiz.mode === "wrong" ? " · 오답 복습" : ` · ${quiz.source}`;
     $("quizCacheMeta").textContent = quiz.savedAt ? ` · 저장됨 ${quiz.savedAt.slice(0, 10)}` : "";
   }
 }
@@ -957,12 +1385,14 @@ function restoreCachedQuizBank() {
 function clearCachedQuizBank() {
   window.SapQuizCache?.clearQuizCache(localStorage);
   quiz.questions = [];
-  quiz.current = 0;
-  quiz.selected = new Set();
-  quiz.revealed = false;
+  quiz.reviewQuestions = [];
+  quiz.mode = "all";
+  resetQuizNavigation();
   quiz.source = "";
   quiz.savedAt = "";
   quiz.attempts = new Map();
+  quiz.dirtyHistoryKeys = new Set();
+  quiz.unsavedLogKeys = new Set();
   $("quizFile").value = "";
   renderQuizBankState();
   renderQuizSavePreview();
@@ -1006,8 +1436,9 @@ function openQuizModal() {
     else renderQuizQuestion();
   } else {
     renderQuizBankState();
-    if (!restoreCachedQuizBank()) setQuizStatus("DOCX를 선택하면 바로 문제풀이가 시작됩니다.");
+    if (!restoreCachedQuizBank()) setQuizStatus("동기화 카드의 문제은행 설정에서 DOCX를 선택하면 바로 시작됩니다.");
     if (quiz.questions.length) showRandomQuizQuestion();
+    else if (wrongRecordsForActiveUser().length) startWrongQuizMode();
     renderQuizSavePreview();
   }
 }
@@ -1018,25 +1449,43 @@ function closeQuizModal() {
 }
 
 function showRandomQuizQuestion() {
-  if (!quiz.questions.length) return;
-  quiz.current = Math.floor(Math.random() * quiz.questions.length);
-  quiz.selected = new Set();
-  quiz.revealed = false;
-  renderQuizQuestion();
+  const questions = activeQuizQuestions();
+  if (!questions.length) return;
+  const nextIndex = window.SapQuizSession.chooseNextRandomIndex(quiz.current, questions.length);
+  navigateQuizTo(nextIndex, { status: quiz.mode === "wrong" ? "오답 문제로 이동했어요." : "" });
 }
 
-function jumpQuizQuestion() {
-  const n = parseInt($("quizJump").value, 10);
-  const idx = quiz.questions.findIndex((q) => q.number === n);
-  if (idx < 0) {
-    setQuizStatus(`Q${isNaN(n) ? "?" : n} 문제를 찾지 못했어요.`, "err");
+function showPreviousQuizQuestion() {
+  if (quiz.historyPos <= 0) return;
+  saveCurrentQuizDraft();
+  quiz.historyPos -= 1;
+  navigateQuizTo(quiz.history[quiz.historyPos], { pushHistory: false, status: "이전 문제로 돌아왔어요." });
+}
+
+function startWrongQuizMode() {
+  const records = wrongRecordsForActiveUser();
+  if (!records.length) {
+    setQuizModeStatus("아직 저장된 오답이 없어요.", "err");
     return;
   }
-  quiz.current = idx;
-  quiz.selected = new Set();
-  quiz.revealed = false;
-  setQuizStatus("문제를 이동했어요.", "ok");
-  renderQuizQuestion();
+  quiz.mode = "wrong";
+  quiz.reviewQuestions = records.map((record) => ({ ...record.question, wrongRecordId: record.id, wrongSource: record.source }));
+  resetQuizNavigation();
+  renderQuizBankState();
+  navigateQuizTo(0, { status: `오답 ${records.length}개 복습을 시작했어요.` });
+}
+
+function startAllQuizMode() {
+  if (!quiz.questions.length) {
+    setQuizStatus("전체 문제은행이 없어요. 동기화 카드의 문제은행 설정에서 DOCX를 먼저 선택해주세요.", "err");
+    return;
+  }
+  quiz.mode = "all";
+  quiz.reviewQuestions = [];
+  resetQuizNavigation();
+  setQuizModeStatus("");
+  renderQuizBankState();
+  showRandomQuizQuestion();
 }
 
 function toggleQuizOption(label) {
@@ -1047,11 +1496,20 @@ function toggleQuizOption(label) {
 }
 
 function renderQuizQuestion() {
-  const q = quiz.questions[quiz.current];
-  if (!q) return;
+  const q = activeQuizQuestion();
+  if (!q) {
+    $("quizNumber").textContent = "Q–";
+    $("quizProgress").textContent = quiz.mode === "wrong" ? "오답 복습 완료" : "–";
+    $("quizPrompt").textContent = quiz.mode === "wrong" ? "저장된 오답을 모두 다시 맞혔어요." : "";
+    $("quizOptions").innerHTML = "";
+    $("quizAnswer").classList.add("hidden");
+    $("quizPrevBtn").disabled = true;
+    renderQuizBankState();
+    return;
+  }
 
   $("quizNumber").textContent = `Q${q.number}`;
-  $("quizProgress").textContent = `${quiz.current + 1} / ${quiz.questions.length}`;
+  $("quizProgress").textContent = `${quiz.current + 1} / ${activeQuizQuestions().length}${quiz.mode === "wrong" ? " · 오답 복습" : ""}`;
   $("quizPrompt").textContent = q.prompt;
 
   const options = $("quizOptions");
@@ -1070,7 +1528,8 @@ function renderQuizQuestion() {
   });
 
   const answer = $("quizAnswer");
-  const attempt = quiz.attempts.get(q.number);
+  const key = quizAttemptKey(q);
+  const attempt = quiz.attempts.get(key);
   answer.classList.toggle("hidden", !quiz.revealed);
   answer.innerHTML = "";
   if (quiz.revealed) {
@@ -1086,31 +1545,94 @@ function renderQuizQuestion() {
         </label>` : ""}
     `;
     $("quizWrongMemo")?.addEventListener("input", (ev) => {
-      const current = quiz.attempts.get(q.number);
+      const current = quiz.attempts.get(key);
       if (!current) return;
       current.note = ev.target.value;
-      quiz.attempts.set(q.number, current);
+      quiz.attempts.set(key, current);
+      updateWrongQuizMemo(q, current);
+      quiz.dirtyHistoryKeys.add(key);
       renderQuizSavePreview();
     });
   }
   renderQuizSessionStats();
+  renderQuizBankState();
+  $("quizPrevBtn").disabled = quiz.historyPos <= 0;
 }
 
 function revealQuizAnswer() {
-  const q = quiz.questions[quiz.current];
+  const q = activeQuizQuestion();
   if (!q) return;
   quiz.revealed = true;
   const selected = [...quiz.selected].sort();
   const correct = window.SapQuizSession.isCorrectAnswer(selected, q.answer);
-  quiz.attempts.set(q.number, {
+  const key = quizAttemptKey(q);
+  quiz.attempts.set(key, {
     number: q.number,
     selected,
     answer: q.answer,
     correct,
-    note: quiz.attempts.get(q.number)?.note || "",
+    note: quiz.attempts.get(key)?.note || "",
+    mode: quiz.mode === "wrong" ? "wrong" : "random",
+    source: q.wrongSource || quiz.source,
+    question: { ...q },
+    attemptKey: key,
   });
+  quiz.dirtyHistoryKeys.add(key);
+  quiz.unsavedLogKeys.add(key);
+  updateWrongQuizRecord(q, quiz.attempts.get(key));
   setQuizApplyButtonEnabled(true);
   renderQuizQuestion();
+}
+
+function updateWrongQuizRecord(question, attempt) {
+  const user = activeEntryUser();
+  if (!user || !attempt) return;
+  let records = loadWrongQuizRecords();
+  if (attempt.correct && question.wrongRecordId) {
+    records = window.SapQuizSession.removeWrongQuizRecord(records, question.wrongRecordId);
+    saveWrongQuizRecords(records);
+    markWrongQuizRecordDeleted(question.wrongRecordId);
+    quiz.reviewQuestions = quiz.reviewQuestions.filter((item) => item.wrongRecordId !== question.wrongRecordId);
+    setQuizModeStatus("정답 처리했어요. 이 문제는 오답노트에서 빠집니다.", "ok");
+    return;
+  }
+  if (!attempt.correct) {
+    const existing = records.find((record) => record.id === question.wrongRecordId);
+    const record = window.SapQuizSession.createWrongQuizRecord({
+      user,
+      source: quiz.source,
+      question,
+      attempt: { ...attempt, createdAt: existing?.createdAt },
+    });
+    records = window.SapQuizSession.upsertWrongQuizRecord(records, record);
+    saveWrongQuizRecords(records);
+  }
+}
+
+function updateWrongQuizMemo(question, attempt) {
+  if (!attempt || attempt.correct) return;
+  let records = loadWrongQuizRecords();
+  const recordId = question.wrongRecordId || window.SapQuizSession.createWrongQuizRecord({
+    user: activeEntryUser(),
+    source: question?.wrongSource || quiz.source,
+    question,
+    attempt,
+  }).id;
+  const existing = records.find((record) => record.id === recordId);
+  if (!existing) {
+    updateWrongQuizRecord(question, attempt);
+    return;
+  }
+  records = records.map((record) => record.id === recordId
+    ? {
+      ...record,
+      selected: [...attempt.selected],
+      answer: [...attempt.answer],
+      note: String(attempt.note || ""),
+      updatedAt: new Date().toISOString(),
+    }
+    : record);
+  saveWrongQuizRecords(records);
 }
 
 function renderQuizSessionStats() {
@@ -1137,10 +1659,11 @@ function renderQuizSavePreview() {
         : ["정답 보기를 누른 문제부터 저장할 수 있어요."],
     };
   }
-  setQuizApplyButtonEnabled(!state.disabled);
+  const hasPending = !!quiz.dirtyHistoryKeys.size || !!quiz.unsavedLogKeys.size;
+  setQuizApplyButtonEnabled(!state.disabled && hasPending);
   button.title = state.lines.join("\n");
   preview.innerHTML = `
-    <strong>${state.disabled ? "아직 저장할 세션이 없어요" : "세션 저장 미리보기"}</strong>
+    <strong>${state.disabled ? "아직 저장할 세션이 없어요" : hasPending ? "세션 저장 미리보기" : "모든 풀이 저장됨"}</strong>
     ${state.lines.map((line) => `<span>${escapeHtml(line)}</span>`).join("")}
   `;
 }
@@ -1204,27 +1727,73 @@ async function saveQuizEntry(entry) {
   }
 }
 
-async function applyQuizSessionToEntry() {
+function quizAttemptsByKeys(keys) {
+  const wanted = new Set(keys);
+  return Array.from(quiz.attempts.values()).filter((attempt) => wanted.has(attempt.attemptKey || `${attempt.mode || quiz.mode}:${attempt.number}`));
+}
+
+function mapFromAttempts(attempts) {
+  return new Map(attempts.map((attempt) => [attempt.number, attempt]));
+}
+
+function setQuizAutoSaveState(text, { spinning = false, kind = "" } = {}) {
+  const spinner = $("quizAutoSaveSpinner");
+  const label = $("quizAutoSaveText");
+  const wrap = $("quizAutoSaveState");
+  if (spinner) spinner.classList.toggle("hidden", !spinning);
+  if (label) label.textContent = text;
+  if (wrap) wrap.className = "quiz-autosave" + (kind ? " " + kind : "");
+}
+
+async function saveQuizSession({ automatic = false } = {}) {
   const user = activeEntryUser();
   if (!user) {
     setQuizStatus("가연 또는 소울 탭에서만 기록에 반영할 수 있어요.", "err");
     return;
   }
-  const summary = window.SapQuizSession.summarizeAttempts(quiz.attempts);
-  if (!summary.dumps) {
-    setQuizStatus("아직 정답 보기를 누른 문제가 없어서 반영할 기록이 없어요.", "err");
+  if (quiz.autoSaving) return;
+  const dirtyAttempts = quizAttemptsByKeys(quiz.dirtyHistoryKeys);
+  const logAttempts = quizAttemptsByKeys(quiz.unsavedLogKeys);
+  if (!dirtyAttempts.length && !logAttempts.length) {
+    if (!automatic) setQuizStatus("새로 저장할 풀이가 없어요.", "ok");
+    setQuizAutoSaveState("저장할 변경 없음", { kind: "" });
     return;
   }
 
-  const wrongLines = window.SapQuizSession.buildWrongProblemLines(quiz.attempts);
-  const entry = window.SapQuizSession.applyQuizSummaryToEntry(todayEntryFor(user), { ...summary, wrongLines });
-  await saveQuizEntry(entry);
+  quiz.autoSaving = true;
+  setQuizAutoSaveState(automatic ? "자동저장 중..." : "세션 저장 중...", { spinning: true, kind: "pending" });
+  try {
+    const historyRecords = dirtyAttempts.map((attempt) => quizHistoryRecordFor(attempt.question, attempt));
+    if (historyRecords.length) {
+      const localHistory = window.SapQuizSession.mergeQuizHistoryRecords(loadLocalQuizHistory(), historyRecords);
+      saveLocalQuizHistory(localHistory);
+      if (ghToken()) await commitQuizHistoryRecords(localHistory);
+    }
 
-  setQuizStatus(`${user} 오늘 기록에 ${summary.dumps}문제, 정답 ${summary.correct}개를 저장했어요.`, "ok");
-  quiz.attempts = new Map();
+    if (logAttempts.length) {
+      const attemptMap = mapFromAttempts(logAttempts);
+      const summary = window.SapQuizSession.summarizeAttempts(attemptMap);
+      const wrongLines = window.SapQuizSession.buildWrongProblemLines(attemptMap);
+      const entry = window.SapQuizSession.applyQuizSummaryToEntry(todayEntryFor(user), { ...summary, wrongLines });
+      await saveQuizEntry(entry);
+      setQuizStatus(`${user} 기록에 ${summary.dumps}문제 저장됨${automatic ? " · 자동저장" : ""}`, "ok");
+      logAttempts.forEach((attempt) => quiz.unsavedLogKeys.delete(attempt.attemptKey || `${attempt.mode || quiz.mode}:${attempt.number}`));
+    } else if (!automatic) {
+      setQuizStatus("풀이 기록을 영구 저장했어요.", "ok");
+    }
+    dirtyAttempts.forEach((attempt) => quiz.dirtyHistoryKeys.delete(attempt.attemptKey || `${attempt.mode || quiz.mode}:${attempt.number}`));
+    setQuizAutoSaveState(`${automatic ? "자동저장" : "저장"} 완료 · ${new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}`, { kind: "ok" });
+  } catch (err) {
+    setQuizStatus(`${automatic ? "자동저장" : "저장"} 실패: ${err.message}`, "err");
+    setQuizAutoSaveState(`${automatic ? "자동저장" : "저장"} 실패`, { kind: "err" });
+  } finally {
+    quiz.autoSaving = false;
+  }
   renderQuizSessionStats();
-  closeQuizModal();
-  document.querySelector(".hero")?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function applyQuizSessionToEntry() {
+  await saveQuizSession({ automatic: false });
 }
 
 function initQuiz() {
@@ -1232,15 +1801,12 @@ function initQuiz() {
   $("quizClearCacheBtn")?.addEventListener("click", clearCachedQuizBank);
   $("quizOpenBtn")?.addEventListener("click", openQuizModal);
   $("quizCloseBtn")?.addEventListener("click", closeQuizModal);
-  $("quizModalBackdrop")?.addEventListener("click", closeQuizModal);
-  $("quizRandomBtn")?.addEventListener("click", showRandomQuizQuestion);
   $("quizNextBtn")?.addEventListener("click", showRandomQuizQuestion);
+  $("quizPrevBtn")?.addEventListener("click", showPreviousQuizQuestion);
+  $("quizRandomModeBtn")?.addEventListener("click", startAllQuizMode);
+  $("quizWrongModeBtn")?.addEventListener("click", startWrongQuizMode);
   $("quizRevealBtn")?.addEventListener("click", revealQuizAnswer);
   $("quizApplyBtn")?.addEventListener("click", applyQuizSessionToEntry);
-  $("quizJumpBtn")?.addEventListener("click", jumpQuizQuestion);
-  $("quizJump")?.addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter") jumpQuizQuestion();
-  });
   document.addEventListener("keydown", (ev) => {
     if (ev.key !== "Escape") return;
     if (!$("summaryModal")?.classList.contains("hidden")) closeSummaryModal();
@@ -1278,7 +1844,9 @@ function initStudyTools() {
     stopStudyTimer().catch((err) => setCommitStatus("타이머 저장 실패: " + err.message, "err"));
   });
   $("timerClearBtn")?.addEventListener("click", clearStudyTimer);
-  $("progressSaveBtn")?.addEventListener("click", saveStudyProgress);
+  $("progressSaveBtn")?.addEventListener("click", () => {
+    saveStudyProgress().catch((err) => setProgressSyncStatus("진도 저장 실패: " + err.message, "err"));
+  });
   $("progressSection")?.addEventListener("change", () => {
     const section = window.SapStudyPlan.sectionById($("progressSection").value);
     $("progressLecture").max = section.lectures || "";
@@ -1287,10 +1855,21 @@ function initStudyTools() {
   ensureTimerTick();
 }
 
+function ensureLocalStorageSync() {
+  if (localSyncTimer) clearInterval(localSyncTimer);
+  localSyncTimer = setInterval(() => {
+    syncLocalStorageToRemote({ quiet: true }).catch((err) => {
+      console.warn("로컬 자동 동기화 실패:", err.message);
+      setCommitStatus("로컬 자동 동기화 실패: " + err.message, "err");
+    });
+  }, LOCAL_SYNC_MS);
+}
+
 /* ── 데이터 로드 ──────────────────────────────────────── */
 async function load() {
   try {
     await loadRemoteSummaries();
+    await syncStudyProgress({ pushLocal: false, quiet: true });
     const res = await fetch(LOG_FILE + "?v=" + Date.now());
     if (!res.ok) throw new Error("HTTP " + res.status);
     LOG = parseLog(await res.text());
@@ -1299,6 +1878,7 @@ async function load() {
   } catch (err) {
     console.warn("기록 fetch 실패 (file:// 환경일 수 있음):", err.message);
     await loadRemoteSummaries();
+    await syncStudyProgress({ pushLocal: false, quiet: true });
     // 커밋로그를 못 읽어도 로컬 임시저장만으로 토글·대시보드는 보여줌
     LOG = [];
     refreshData();
@@ -1336,7 +1916,8 @@ function init() {
     localStorage.setItem(GH_TOKEN_KEY, t);
     $("ghToken").value = "";
     updateGhState();
-    setCommitStatus("토큰 저장됨 · 이제 문제풀이 세션 저장이 자동 커밋돼요", "ok");
+    setCommitStatus("토큰 저장됨 · 로컬 저장분을 3분마다 자동 동기화해요", "ok");
+    syncLocalStorageToRemote().catch((err) => setCommitStatus("로컬 동기화 실패: " + err.message, "err"));
   });
   $("ghClearBtn")?.addEventListener("click", () => {
     localStorage.removeItem(GH_TOKEN_KEY);
@@ -1352,6 +1933,7 @@ function init() {
     updateLocalBadge();
   });
   load();
+  ensureLocalStorageSync();
   updateLocalBadge();
   updateGhState();
 }

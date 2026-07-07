@@ -49,6 +49,19 @@
       .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
   }
 
+  function mergeProgress(...groups) {
+    const byUser = new Map();
+    groups.flat().forEach((item) => {
+      const [normalized] = normalizeProgress([item]);
+      if (!normalized) return;
+      const existing = byUser.get(normalized.user);
+      if (!existing || String(normalized.updatedAt).localeCompare(String(existing.updatedAt)) > 0) {
+        byUser.set(normalized.user, normalized);
+      }
+    });
+    return normalizeProgress([...byUser.values()]);
+  }
+
   function loadProgress(storage) {
     try {
       return normalizeProgress(JSON.parse(storage.getItem(KEY) || "[]"));
@@ -98,6 +111,21 @@
     });
   }
 
+  function sectionIndex(sectionId) {
+    return SECTIONS.findIndex((section) => section.id === sectionId);
+  }
+
+  function completedSectionIds(progress) {
+    const currentIndex = sectionIndex(progress?.sectionId);
+    if (currentIndex < 0) return new Set();
+    const current = sectionById(progress.sectionId);
+    const lecture = Number(progress.lecture || 0);
+    const currentDone = !!progress.done || (!!current.lectures && lecture >= current.lectures);
+    return new Set(SECTIONS
+      .filter((section, index) => index < currentIndex || (index === currentIndex && currentDone))
+      .map((section) => section.id));
+  }
+
   return {
     KEY,
     SECTIONS,
@@ -105,9 +133,11 @@
     saveProgress,
     updateProgress,
     upsertProgress,
+    mergeProgress,
     progressForUser,
     compareProgress,
     sectionById,
     sectionPercent,
+    completedSectionIds,
   };
 });
