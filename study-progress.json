@@ -1,16 +1,16 @@
 [
   {
+    "user": "소울",
+    "sectionId": "section-8",
+    "lecture": 6,
+    "done": true,
+    "updatedAt": "2026-07-12T13:31:14.087Z"
+  },
+  {
     "user": "가연",
     "sectionId": "section-7",
     "lecture": 7,
     "done": true,
     "updatedAt": "2026-07-12T11:33:12.203Z"
-  },
-  {
-    "user": "소울",
-    "sectionId": "section-6",
-    "lecture": 14,
-    "done": true,
-    "updatedAt": "2026-07-06T11:00:04.354Z"
   }
 ]
