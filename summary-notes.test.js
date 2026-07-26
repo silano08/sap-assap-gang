@@ -138,6 +138,31 @@ test("buildSummaryLibrary filters by section and keeps newest notes first inside
   assert.equal(library.total, 2);
 });
 
+test("buildSummaryLibrary can search externally loaded chunk content", () => {
+  const notes = [
+    {
+      id: "chunked",
+      user: "가연",
+      date: "2026-07-07",
+      sectionId: "section-5",
+      title: "큰 요약",
+      content: "",
+      contentPreview: "앞부분",
+      contentRef: { type: "chunks", paths: ["summary-chunks/chunked-001.md"] },
+      createdAt: "2026-07-07T01:00:00.000Z",
+    },
+  ];
+
+  const library = buildSummaryLibrary(notes, {
+    query: "PrivateLink",
+    sections: [{ id: "section-5", title: "컴퓨팅" }],
+    contentById: new Map([["chunked", "본문 전체에 PrivateLink 설명이 있음"]]),
+  });
+
+  assert.equal(library.total, 1);
+  assert.equal(library.groups[0].notes[0].id, "chunked");
+});
+
 test("legacy summary notes without sectionId are treated as misc", () => {
   const storage = fakeStorage();
   storage.setItem("sap-summary-notes-v1", JSON.stringify([

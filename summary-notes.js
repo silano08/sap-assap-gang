@@ -93,7 +93,7 @@
     return notes.filter((note) => (note.sectionId || MISC_SECTION_ID) === sectionId);
   }
 
-  function buildSummaryLibrary(notes, { query = "", sectionId = "", sections = [] } = {}) {
+  function buildSummaryLibrary(notes, { query = "", sectionId = "", sections = [], contentById = null } = {}) {
     const normalized = normalizeSummaryNotes(notes);
     const sectionMap = new Map((Array.isArray(sections) ? sections : []).map((section, index) => [
       section.id,
@@ -106,7 +106,7 @@
       const section = sectionMap.get(note.sectionId || MISC_SECTION_ID);
       const haystack = [
         note.title,
-        summaryTextForSearch(note),
+        summaryTextForSearch(note, contentById),
         note.date,
         note.user,
         section?.title,
@@ -191,8 +191,14 @@
     return upsertSummaryNote(notes, updated);
   }
 
-  function summaryTextForSearch(note) {
-    return String(note?.content || note?.contentPreview || note?.contentRef?.summary || "").trim();
+  function contentOverrideFor(note, contentById) {
+    if (!note?.id || !contentById) return "";
+    if (contentById instanceof Map) return contentById.get(note.id) || "";
+    return contentById[note.id] || "";
+  }
+
+  function summaryTextForSearch(note, contentById = null) {
+    return String(contentOverrideFor(note, contentById) || note?.content || note?.contentPreview || note?.contentRef?.summary || "").trim();
   }
 
   function splitSummaryContent(content, chunkSize = 60000) {

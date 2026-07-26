@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AWS SAP 스터디 트래커</title>
-  <link rel="stylesheet" href="style.css?v=20260707-prev-enabled" />
+  <link rel="stylesheet" href="style.css?v=20260726-summary-vault" />
 </head>
 <body>
   <div class="wrap">
@@ -136,6 +136,7 @@
           <div class="summary-browser-tools">
             <input type="search" id="summarySearch" placeholder="요약 안에서 검색" autocomplete="off" />
             <select id="summaryFilterSection" aria-label="요약 보기 섹션"></select>
+            <button class="btn small primary" id="summaryVaultOpenBtn" type="button">요약 Vault 열기</button>
           </div>
           <div id="summaryList" class="summary-list"></div>
         </div>
@@ -204,8 +205,17 @@
         </div>
         <button class="modal-close" id="summaryCloseBtn" type="button" aria-label="요약정리 닫기">×</button>
       </header>
-      <article class="summary-note-content summary-modal-content" id="summaryModalContent"></article>
+      <div class="summary-vault-tools">
+        <input type="search" id="summaryModalSearch" placeholder="요약 전체에서 검색" autocomplete="off" />
+        <span class="muted" id="summaryModalSearchStatus"></span>
+      </div>
+      <div class="summary-vault">
+        <aside class="summary-vault-tree" id="summaryModalTree" aria-label="요약 트리"></aside>
+        <article class="summary-note-content summary-modal-content" id="summaryModalContent"></article>
+      </div>
       <footer class="modal-actions summary-modal-actions">
+        <button class="btn ghost" id="summaryModalPrevBtn" type="button">이전</button>
+        <button class="btn ghost" id="summaryModalNextBtn" type="button">다음</button>
         <button class="btn ghost" id="summaryModalEditBtn" type="button">수정</button>
         <button class="btn ghost danger" id="summaryModalDeleteBtn" type="button">삭제</button>
       </footer>
@@ -277,7 +287,7 @@
   <script src="quiz-session.js?v=20260707-local-sync"></script>
   <script src="study-timer.js?v=20260701-timer-fix"></script>
   <script src="study-plan.js?v=20260707-progress-sync"></script>
-  <script src="summary-notes.js?v=20260707-local-sync"></script>
-  <script src="app.js?v=20260707-immediate-save"></script>
+  <script src="summary-notes.js?v=20260726-summary-vault"></script>
+  <script src="app.js?v=20260726-summary-vault"></script>
 </body>
 </html>

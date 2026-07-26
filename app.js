@@ -32,6 +32,9 @@ let summaryEditingId = null;
 let summarySearchQuery = "";
 let summaryFilterSection = "";
 let summaryModalNoteId = null;
+let summaryVaultQuery = "";
+let summaryVaultNoteIds = [];
+let summaryVaultRenderToken = 0;
 let localSyncTimer = null;
 let localSyncRunning = false;
 const SUMMARY_CONTENT_CACHE = new Map();
@@ -464,6 +467,7 @@ function renderSummaryNotes(user) {
   $("summaryFile").disabled = !canEdit;
   $("summarySearch").disabled = !notes.length;
   $("summaryFilterSection").disabled = !notes.length;
+  $("summaryVaultOpenBtn").disabled = !notes.length;
   if (!canEdit) setSummaryStatus("개인 탭에서 요약을 저장할 수 있어요.");
 
   box.innerHTML = "";
@@ -535,14 +539,116 @@ async function loadSummaryNoteContent(note) {
   return chunks.join("");
 }
 
+function summaryModalNotes() {
+  return window.SapSummaryNotes.filterSummaryNotes(summaryNotesForDisplay(), activeEntryUser());
+}
+
 function summarySectionLabel(note) {
   const section = summarySections().find((item) => item.id === (note?.sectionId || window.SapSummaryNotes.MISC_SECTION_ID));
   if (!section) return "기타";
   return section.number ? `섹션 ${section.number} · ${section.title}` : section.title;
 }
 
-async function openSummaryModal(id) {
-  const note = summaryNotesForDisplay().find((item) => item.id === id);
+async function buildSummaryVaultLibrary() {
+  const notes = summaryModalNotes();
+  const query = String(summaryVaultQuery || "").trim();
+  const contentById = new Map();
+  if (query) {
+    await Promise.all(notes.map(async (note) => {
+      try {
+        contentById.set(note.id, await loadSummaryNoteContent(note));
+      } catch {
+        contentById.set(note.id, summaryContentForPreview(note));
+      }
+    }));
+  }
+  return window.SapSummaryNotes.buildSummaryLibrary(notes, {
+    query,
+    sections: summarySections(),
+    contentById,
+  });
+}
+
+function renderSummaryVaultTree(library) {
+  const tree = $("summaryModalTree");
+  if (!tree) return;
+  summaryVaultNoteIds = library.groups.flatMap((group) => group.notes.map((note) => note.id));
+  if (!summaryVaultNoteIds.length) {
+    tree.innerHTML = '<p class="empty">검색 결과가 없어요.</p>';
+    return;
+  }
+  tree.innerHTML = "";
+  library.groups.forEach((section) => {
+    const group = document.createElement("div");
+    group.className = "summary-vault-section";
+    group.innerHTML = `
+      <div class="summary-vault-section-title">
+        <span>${section.number ? `섹션 ${section.number}` : "기타"} · ${escapeHtml(section.title)}</span>
+        <span>${section.notes.length}</span>
+      </div>
+      <div class="summary-vault-note-list"></div>
+    `;
+    const list = group.querySelector(".summary-vault-note-list");
+    section.notes.forEach((note) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "summary-vault-note";
+      button.classList.toggle("active", note.id === summaryModalNoteId);
+      button.dataset.summaryVaultNote = note.id;
+      button.innerHTML = `
+        <span>${escapeHtml(note.title)}</span>
+        <small>${escapeHtml(note.date)}</small>
+      `;
+      button.addEventListener("click", () => selectSummaryModalNote(note.id));
+      list.appendChild(button);
+    });
+    tree.appendChild(group);
+  });
+}
+
+function updateSummaryModalNav() {
+  const index = summaryVaultNoteIds.indexOf(summaryModalNoteId);
+  const prev = $("summaryModalPrevBtn");
+  const next = $("summaryModalNextBtn");
+  if (prev) prev.disabled = index <= 0;
+  if (next) next.disabled = index < 0 || index >= summaryVaultNoteIds.length - 1;
+  $("summaryModalSearchStatus").textContent = summaryVaultNoteIds.length
+    ? `${index + 1}/${summaryVaultNoteIds.length}개`
+    : "0개";
+}
+
+function highlightSummaryTerms(container, query) {
+  const terms = String(query || "").trim().split(/\s+/).filter(Boolean);
+  if (!container || !terms.length) return;
+  const pattern = new RegExp(`(${terms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`, "gi");
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      if (!node.nodeValue || !pattern.test(node.nodeValue)) return NodeFilter.FILTER_REJECT;
+      pattern.lastIndex = 0;
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  nodes.forEach((node) => {
+    const frag = document.createDocumentFragment();
+    let last = 0;
+    pattern.lastIndex = 0;
+    node.nodeValue.replace(pattern, (match, _term, offset) => {
+      if (offset > last) frag.appendChild(document.createTextNode(node.nodeValue.slice(last, offset)));
+      const mark = document.createElement("mark");
+      mark.textContent = match;
+      frag.appendChild(mark);
+      last = offset + match.length;
+      return match;
+    });
+    if (last < node.nodeValue.length) frag.appendChild(document.createTextNode(node.nodeValue.slice(last)));
+    node.parentNode.replaceChild(frag, node);
+  });
+}
+
+async function selectSummaryModalNote(id) {
+  const note = summaryModalNotes().find((item) => item.id === id);
   if (!note) return;
   summaryModalNoteId = id;
   $("summaryModalTitle").textContent = note.title;
@@ -554,14 +660,50 @@ async function openSummaryModal(id) {
   $("summaryModalDeleteBtn").disabled = !canEdit;
   $("summaryModalEditBtn").dataset.summaryEdit = id;
   $("summaryModalDeleteBtn").dataset.summaryDelete = id;
-  $("summaryModal").classList.remove("hidden");
-  document.body.classList.add("modal-open");
+  document.querySelectorAll("[data-summary-vault-note]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.summaryVaultNote === id);
+  });
+  updateSummaryModalNav();
   try {
     const content = await loadSummaryNoteContent(note);
-    if (summaryModalNoteId === id) $("summaryModalContent").innerHTML = window.SapSummaryNotes.markdownToHtml(content);
+    if (summaryModalNoteId === id) {
+      const contentEl = $("summaryModalContent");
+      contentEl.innerHTML = window.SapSummaryNotes.markdownToHtml(content);
+      highlightSummaryTerms(contentEl, summaryVaultQuery);
+      contentEl.scrollTop = 0;
+    }
   } catch (err) {
     $("summaryModalContent").innerHTML = `<p class="muted">요약 본문을 불러오지 못했어요: ${escapeHtml(err.message)}</p>`;
   }
+}
+
+async function renderSummaryVault(preferredId = summaryModalNoteId) {
+  const token = ++summaryVaultRenderToken;
+  $("summaryModalTree").innerHTML = '<p class="muted">요약 목록을 불러오는 중...</p>';
+  const library = await buildSummaryVaultLibrary();
+  if (token !== summaryVaultRenderToken) return;
+  renderSummaryVaultTree(library);
+  const nextId = summaryVaultNoteIds.includes(preferredId) ? preferredId : summaryVaultNoteIds[0];
+  if (nextId) await selectSummaryModalNote(nextId);
+  else {
+    summaryModalNoteId = null;
+    $("summaryModalTitle").textContent = "요약정리";
+    $("summaryModalSection").textContent = "검색 결과 없음";
+    $("summaryModalMeta").textContent = "";
+    $("summaryModalContent").innerHTML = '<p class="empty">검색 결과가 없어요.</p>';
+    $("summaryModalEditBtn").disabled = true;
+    $("summaryModalDeleteBtn").disabled = true;
+    updateSummaryModalNav();
+  }
+}
+
+async function openSummaryModal(id = null) {
+  summaryVaultQuery = summarySearchQuery;
+  if ($("summaryModalSearch")) $("summaryModalSearch").value = summaryVaultQuery;
+  summaryModalNoteId = id;
+  $("summaryModal").classList.remove("hidden");
+  document.body.classList.add("modal-open");
+  await renderSummaryVault(id);
 }
 
 function parseProgressJson(text) {
@@ -600,6 +742,7 @@ function setProgressSyncStatus(text, kind = "") {
 
 function closeSummaryModal() {
   summaryModalNoteId = null;
+  summaryVaultNoteIds = [];
   $("summaryModal")?.classList.add("hidden");
   document.body.classList.remove("modal-open");
 }
@@ -1834,6 +1977,21 @@ function initSummaryNotes() {
   });
   $("summaryCloseBtn")?.addEventListener("click", closeSummaryModal);
   $("summaryModalBackdrop")?.addEventListener("click", closeSummaryModal);
+  $("summaryVaultOpenBtn")?.addEventListener("click", () => openSummaryModal());
+  $("summaryModalSearch")?.addEventListener("input", (ev) => {
+    summaryVaultQuery = ev.target.value;
+    renderSummaryVault(summaryModalNoteId).catch((err) => {
+      $("summaryModalContent").innerHTML = `<p class="muted">요약 검색 실패: ${escapeHtml(err.message)}</p>`;
+    });
+  });
+  $("summaryModalPrevBtn")?.addEventListener("click", () => {
+    const index = summaryVaultNoteIds.indexOf(summaryModalNoteId);
+    if (index > 0) selectSummaryModalNote(summaryVaultNoteIds[index - 1]);
+  });
+  $("summaryModalNextBtn")?.addEventListener("click", () => {
+    const index = summaryVaultNoteIds.indexOf(summaryModalNoteId);
+    if (index >= 0 && index < summaryVaultNoteIds.length - 1) selectSummaryModalNote(summaryVaultNoteIds[index + 1]);
+  });
   $("summaryModalEditBtn")?.addEventListener("click", editSummaryNote);
   $("summaryModalDeleteBtn")?.addEventListener("click", deleteSummaryNote);
 }
